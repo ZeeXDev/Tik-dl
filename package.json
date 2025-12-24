@@ -1,0 +1,36 @@
+{
+  "name": "telegram-video-downloader",
+  "version": "1.0.0",
+  "description": "Mini app Telegram pour télécharger des vidéos TikTok, Instagram et Pinterest - 100% GRATUIT",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js",
+    "test": "echo \"No tests yet\""
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "video",
+    "downloader",
+    "tiktok",
+    "instagram",
+    "pinterest",
+    "free"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.64.0",
+    "axios": "^1.6.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
