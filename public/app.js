@@ -1,5 +1,5 @@
 // ===== CONFIGURATION =====
-const API_URL = 'https://nova-download.netlify.app/api'; // Change en production
+const API_URL = 'https://tik-dl1.vercel.app/api'; // Change en production
 const ADSGRAM_BLOCK_ID = 'YOUR_ADSGRAM_BLOCK_ID'; // À remplacer
 
 // ===== TELEGRAM WEB APP =====
