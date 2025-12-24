@@ -10,7 +10,7 @@ const { getUser, updateUserFreeTime, checkFreeTime } = require('./database');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const WEBAPP_URL = process.env.WEBAPP_URL || 'https://yourdomain.com';
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://nova-download.netlify.app/';
 
 // ===== MIDDLEWARE =====
 app.use(cors());
@@ -71,7 +71,7 @@ bot.onText(/\/help/, (msg) => {
         `✅ TikTok\n` +
         `✅ Instagram\n` +
         `✅ Pinterest\n\n` +
-        `**Besoin d'aide ?** Contacte @support`,
+        `**Besoin d'aide ?** Contacte @kingcey`,
         { parse_mode: 'Markdown' }
     );
 });
