@@ -1,6 +1,6 @@
 // ===== CONFIGURATION =====
 const API_URL = 'https://tik-dl1.vercel.app/api'; // Change en production
-const ADSGRAM_BLOCK_ID = 'YOUR_ADSGRAM_BLOCK_ID'; // À remplacer
+const ADSGRAM_BLOCK_ID = 'int-12345'; // À remplacer
 
 // ===== TELEGRAM WEB APP =====
 let tg = window.Telegram?.WebApp;
