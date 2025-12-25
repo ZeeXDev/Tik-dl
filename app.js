@@ -1,7 +1,7 @@
 // ===== CONFIGURATION =====
 // ⚠️ CHANGE CETTE URL AVEC TON BACKEND RENDER !
 const API_URL = 'https://tik-dl1.onrender.com/api';  // ← À CHANGER
-const ADSGRAM_BLOCK_ID = 'int-19928';  // ← À CHANGER
+const ADSGRAM_BLOCK_ID = 'int-19937';  // ← À CHANGER
 
 // ===== TELEGRAM WEB APP =====
 let tg = window.Telegram?.WebApp;
