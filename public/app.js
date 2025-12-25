@@ -1,6 +1,6 @@
 // ===== CONFIGURATION =====
 // ⚠️ CHANGE CETTE URL AVEC TON BACKEND RENDER !
-const API_URL = 'https://TON-BACKEND.onrender.com/api';  // ← À CHANGER
+const API_URL = 'https://tik-dl1.onrender.com/api';  // ← À CHANGER
 const ADSGRAM_BLOCK_ID = 'TON_BLOCK_ID';  // ← À CHANGER
 
 // ===== TELEGRAM WEB APP =====
