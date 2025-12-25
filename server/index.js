@@ -10,10 +10,13 @@ const { getUser, updateUserFreeTime, checkFreeTime } = require('./database');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const WEBAPP_URL = process.env.WEBAPP_URL || 'https://tik-dl1.onrender.com';
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://tik-dl3.vercel.app';
 
 // ===== MIDDLEWARE =====
-app.use(cors());
+app.use(cors({
+    origin: [WEBAPP_URL, 'https://t.me', 'https://web.telegram.org'],
+    credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -22,7 +25,7 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 console.log('🤖 Bot Telegram démarré...');
 
-// Commande /start
+// Commande /start avec bouton WebApp
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     const firstName = msg.from.first_name || 'utilisateur';
@@ -33,6 +36,12 @@ bot.onText(/\/start/, (msg) => {
                 {
                     text: '🚀 Ouvrir Video Downloader',
                     web_app: { url: WEBAPP_URL }
+                }
+            ],
+            [
+                {
+                    text: '❓ Aide',
+                    callback_data: 'help'
                 }
             ]
         ]
@@ -46,7 +55,12 @@ bot.onText(/\/start/, (msg) => {
         `🎵 TikTok\n` +
         `📸 Instagram\n` +
         `📌 Pinterest\n\n` +
-        `Clique sur le bouton ci-dessous pour commencer !`,
+        `**Comment ça marche ?**\n` +
+        `1️⃣ Clique sur le bouton ci-dessous\n` +
+        `2️⃣ Regarde une pub (2h gratuit)\n` +
+        `3️⃣ Colle le lien de ta vidéo\n` +
+        `4️⃣ Je t'envoie la vidéo ici ! 🎉\n\n` +
+        `C'est parti ! 👇`,
         {
             parse_mode: 'Markdown',
             reply_markup: keyboard
@@ -57,23 +71,117 @@ bot.onText(/\/start/, (msg) => {
 // Commande /help
 bot.onText(/\/help/, (msg) => {
     const chatId = msg.chat.id;
+    sendHelpMessage(chatId);
+});
+
+// Callback pour le bouton Aide
+bot.on('callback_query', (query) => {
+    const chatId = query.message.chat.id;
     
+    if (query.data === 'help') {
+        sendHelpMessage(chatId);
+        bot.answerCallbackQuery(query.id, { text: 'Voici l\'aide !' });
+    }
+});
+
+// Fonction d'aide
+function sendHelpMessage(chatId) {
     bot.sendMessage(
         chatId,
         `📖 **Aide Video Downloader**\n\n` +
-        `**Comment ça marche ?**\n` +
-        `1️⃣ Ouvre l'application\n` +
-        `2️⃣ Regarde une pub pour 2h gratuit\n` +
-        `3️⃣ Colle le lien de ta vidéo\n` +
-        `4️⃣ Clique sur Télécharger\n` +
-        `5️⃣ Je t'envoie la vidéo ici !\n\n` +
-        `**Plateformes supportées :**\n` +
-        `✅ TikTok\n` +
-        `✅ Instagram\n` +
-        `✅ Pinterest\n\n` +
-        `**Besoin d'aide ?** Contacte @kingcey`,
+        `**🎯 Comment utiliser le bot ?**\n` +
+        `1. Clique sur "🚀 Ouvrir Video Downloader"\n` +
+        `2. Regarde une pub pour débloquer 2h\n` +
+        `3. Colle le lien de ta vidéo\n` +
+        `4. Clique sur Télécharger\n` +
+        `5. Je t'envoie la vidéo ici ! 📹\n\n` +
+        `**✅ Plateformes supportées :**\n` +
+        `• TikTok (sans watermark)\n` +
+        `• Instagram (Reels & Posts)\n` +
+        `• Pinterest\n\n` +
+        `**⏰ Système gratuit :**\n` +
+        `• 1 pub = 2h de téléchargements\n` +
+        `• Illimité pendant 2h\n` +
+        `• Après 2h, regarde une nouvelle pub\n\n` +
+        `**🆘 Problèmes ?**\n` +
+        `• Vérifie que le lien est public\n` +
+        `• Vérifie que c'est bien une vidéo\n` +
+        `• Contacte le support si besoin\n\n` +
+        `Bonne utilisation ! 😊`,
         { parse_mode: 'Markdown' }
     );
+}
+
+// Répondre aux messages texte (liens envoyés directement)
+bot.on('message', async (msg) => {
+    // Ignorer les commandes
+    if (msg.text && msg.text.startsWith('/')) {
+        return;
+    }
+    
+    // Vérifier si c'est un lien
+    const text = msg.text || '';
+    const urlPattern = /(https?:\/\/[^\s]+)/g;
+    const urls = text.match(urlPattern);
+    
+    if (urls && urls.length > 0) {
+        const chatId = msg.chat.id;
+        const url = urls[0];
+        
+        // Détecter la plateforme
+        let platform = null;
+        if (url.includes('tiktok.com')) platform = 'tiktok';
+        else if (url.includes('instagram.com') || url.includes('instagr.am')) platform = 'instagram';
+        else if (url.includes('pinterest.com')) platform = 'pinterest';
+        
+        if (platform) {
+            // Vérifier free time
+            const hasFreeTime = await checkFreeTime(chatId);
+            
+            if (!hasFreeTime) {
+                const keyboard = {
+                    inline_keyboard: [[{
+                        text: '🚀 Ouvrir l\'app',
+                        web_app: { url: WEBAPP_URL }
+                    }]]
+                };
+                
+                bot.sendMessage(
+                    chatId,
+                    `⚠️ Tu dois d'abord regarder une pub !\n\n` +
+                    `Ouvre l'application et regarde une pub pour débloquer 2h de téléchargements gratuits 🎁`,
+                    { reply_markup: keyboard }
+                );
+                return;
+            }
+            
+            // Télécharger
+            bot.sendMessage(chatId, `⏳ Téléchargement en cours...\nPlateforme : ${platform.toUpperCase()}`);
+            
+            try {
+                await downloadAndSend(chatId, url, platform);
+            } catch (error) {
+                bot.sendMessage(
+                    chatId,
+                    `❌ Erreur lors du téléchargement.\n\n` +
+                    `Raisons possibles :\n` +
+                    `• Vidéo privée ou supprimée\n` +
+                    `• Lien invalide\n` +
+                    `• Problème technique\n\n` +
+                    `Réessaie avec un autre lien.`
+                );
+            }
+        } else {
+            bot.sendMessage(
+                chatId,
+                `❌ Plateforme non supportée.\n\n` +
+                `J'accepte uniquement :\n` +
+                `🎵 TikTok\n` +
+                `📸 Instagram\n` +
+                `📌 Pinterest`
+            );
+        }
+    }
 });
 
 // ===== API ROUTES =====
@@ -137,6 +245,15 @@ app.post('/api/watch-ad', async (req, res) => {
         await updateUserFreeTime(userId, freeUntil);
         
         console.log(`✅ User ${userId} a regardé une pub - Free until: ${freeUntil}`);
+        
+        // Envoyer un message de confirmation
+        bot.sendMessage(
+            userId,
+            `🎉 Parfait !\n\n` +
+            `Tu as maintenant **2 heures** de téléchargements gratuits !\n\n` +
+            `Tu peux télécharger autant de vidéos que tu veux pendant les 2 prochaines heures. ⏰\n\n` +
+            `Bon téléchargement ! 📥`
+        ).catch(err => console.log('Erreur envoi message:', err));
         
         res.json({
             success: true,
@@ -202,6 +319,14 @@ async function downloadAndSend(userId, url, platform) {
     try {
         console.log(`⬇️ Téléchargement ${platform} pour user ${userId}...`);
         
+        // Envoyer un message de statut
+        const statusMsg = await bot.sendMessage(
+            userId,
+            `⏳ Téléchargement en cours...\n\n` +
+            `Plateforme : ${platform.toUpperCase()}\n` +
+            `Cela peut prendre 10-30 secondes ⏱️`
+        );
+        
         // Télécharger la vidéo
         const videoPath = await downloadVideo(url, platform);
         
@@ -211,9 +336,12 @@ async function downloadAndSend(userId, url, platform) {
         
         console.log(`✅ Vidéo téléchargée: ${videoPath}`);
         
+        // Supprimer le message de statut
+        bot.deleteMessage(userId, statusMsg.message_id).catch(() => {});
+        
         // Envoyer via bot
         await bot.sendVideo(userId, videoPath, {
-            caption: `✅ Voici votre vidéo ${platform.toUpperCase()} !\n\n🎥 Téléchargé avec Video Downloader`,
+            caption: `✅ Voici votre vidéo ${platform.toUpperCase()} !\n\n🎥 Téléchargé avec Video Downloader\n⏰ Téléchargements gratuits restants : consultez l'app`,
             supports_streaming: true
         });
         
@@ -233,11 +361,12 @@ async function downloadAndSend(userId, url, platform) {
         bot.sendMessage(
             userId,
             `❌ Désolé, une erreur est survenue lors du téléchargement.\n\n` +
-            `Raison possible :\n` +
+            `Raisons possibles :\n` +
             `• Vidéo privée ou supprimée\n` +
             `• Lien invalide\n` +
-            `• Problème de connexion\n\n` +
-            `Réessayez avec un autre lien.`
+            `• Problème de connexion\n` +
+            `• Vidéo trop lourde\n\n` +
+            `Réessayez avec un autre lien ou contactez le support.`
         );
     }
 }
@@ -247,7 +376,8 @@ app.get('/health', (req, res) => {
     res.json({
         status: 'OK',
         timestamp: new Date().toISOString(),
-        bot: 'running'
+        bot: 'running',
+        webapp: WEBAPP_URL
     });
 });
 
@@ -259,7 +389,12 @@ app.get('/', (req, res) => {
         endpoints: {
             status: 'GET /api/status/:userId',
             watchAd: 'POST /api/watch-ad',
-            download: 'POST /api/download'
+            download: 'POST /api/download',
+            health: 'GET /health'
+        },
+        bot: {
+            status: 'running',
+            webapp: WEBAPP_URL
         }
     });
 });
@@ -277,12 +412,13 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
     console.log(`🚀 Serveur démarré sur le port ${PORT}`);
     console.log(`📱 WebApp URL: ${WEBAPP_URL}`);
-    console.log(`🤖 Bot Token: ${BOT_TOKEN ? '✅' : '❌'}`);
+    console.log(`🤖 Bot Token: ${BOT_TOKEN ? '✅ Configuré' : '❌ Manquant'}`);
+    console.log(`🌐 Backend URL: http://localhost:${PORT}`);
 });
 
 // ===== GESTION ERREURS BOT =====
 bot.on('polling_error', (error) => {
-    console.error('Erreur polling:', error);
+    console.error('Erreur polling:', error.code, error.message);
 });
 
 bot.on('error', (error) => {
