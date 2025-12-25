@@ -102,42 +102,42 @@ async function downloadInstagram(url) {
     let videoPath = null;
     let caption = '';
     
-    // Méthode 1 : SaveFrom API (NOUVELLE)
+    // Méthode 1 : API Insta Downloader (NOUVELLE - La meilleure)
     try {
-        console.log('Tentative SaveFrom API...');
-        const result = await downloadInstagramSaveFrom(url);
+        console.log('Tentative API Insta Downloader...');
+        const result = await downloadInstagramAPI(url);
         videoPath = result.path;
         caption = result.caption;
     } catch (error) {
-        console.log('SaveFrom échoué:', error.message);
+        console.log('Insta Downloader échoué:', error.message);
     }
     
-    // Méthode 2 : SnapInsta API (NOUVELLE)
+    // Méthode 2 : Direct scraping avec mobile user agent
     if (!videoPath) {
         try {
-            console.log('Tentative SnapInsta API...');
-            const result = await downloadInstagramSnapInsta(url);
+            console.log('Tentative scraping mobile Instagram...');
+            const result = await downloadInstagramMobile(url);
             videoPath = result.path;
             caption = result.caption;
         } catch (error) {
-            console.log('SnapInsta échoué:', error.message);
+            console.log('Scraping mobile échoué:', error.message);
         }
     }
     
-    // Méthode 3 : Scraping direct
+    // Méthode 3 : Scraping desktop
     if (!videoPath) {
         try {
-            console.log('Tentative scraping Instagram...');
+            console.log('Tentative scraping desktop Instagram...');
             const result = await downloadInstagramScraping(url);
             videoPath = result.path;
             caption = result.caption;
         } catch (error) {
-            console.log('Scraping échoué:', error.message);
+            console.log('Scraping desktop échoué:', error.message);
         }
     }
     
     if (!videoPath) {
-        throw new Error('Impossible de télécharger cette vidéo Instagram. Vérifiez que le compte n\'est pas privé et que c\'est bien une vidéo.');
+        throw new Error('Impossible de télécharger cette vidéo Instagram. Vérifiez que le compte n\'est pas privé et que c\'est bien une vidéo (Reel ou Post vidéo).');
     }
     
     return {
@@ -146,80 +146,104 @@ async function downloadInstagram(url) {
     };
 }
 
-// Instagram - SaveFrom API
-async function downloadInstagramSaveFrom(url) {
-    const response = await axios.post('https://saveig.app/api/ajaxSearch', 
-        `q=${encodeURIComponent(url)}&t=media&lang=en`,
-        {
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            timeout: 20000
-        }
-    );
-    
-    if (response.data && response.data.data) {
-        // Parser le HTML pour trouver l'URL vidéo
-        const html = response.data.data;
-        const match = html.match(/href="([^"]+)"[^>]*download[^>]*>.*?Download/i);
-        
-        if (match && match[1]) {
-            const videoUrl = match[1];
-            
-            // Extraire la caption depuis le HTML
-            const captionMatch = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i) ||
-                                html.match(/<div[^>]*class="[^"]*caption[^"]*"[^>]*>([^<]+)<\/div>/i);
-            const caption = captionMatch ? captionMatch[1].trim() : '';
-            
-            console.log('✅ URL Instagram trouvée via SaveFrom');
-            const videoPath = await downloadFromUrl(videoUrl, 'instagram');
-            
-            return { path: videoPath, caption: caption };
-        }
-    }
-    
-    throw new Error('URL non trouvée via SaveFrom');
-}
-
-// Instagram - SnapInsta API
-async function downloadInstagramSnapInsta(url) {
-    const response = await axios.post('https://snapinsta.app/api/ajaxSearch', 
-        `q=${encodeURIComponent(url)}&t=media&lang=en`,
-        {
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
-            },
-            timeout: 20000
-        }
-    );
+// Instagram - API Insta Downloader (NOUVELLE)
+async function downloadInstagramAPI(url) {
+    const response = await axios.get('https://v3.igdownloader.app/api/ajaxSearch', {
+        params: {
+            recaptchaToken: '',
+            q: url,
+            t: 'media',
+            lang: 'en'
+        },
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Origin': 'https://igdownloader.app',
+            'Referer': 'https://igdownloader.app/'
+        },
+        timeout: 20000
+    });
     
     if (response.data && response.data.data) {
         const html = response.data.data;
         
-        // Chercher l'URL de la vidéo HD
-        const hdMatch = html.match(/href="([^"]+)"[^>]*>.*?HD.*?<\/a>/i);
-        const normalMatch = html.match(/href="([^"]+)"[^>]*download[^>]*>/i);
-        
-        const match = hdMatch || normalMatch;
+        // Chercher l'URL vidéo
+        const videoMatch = html.match(/href="([^"]+)"[^>]*class="[^"]*download[^"]*"/i) ||
+                          html.match(/href="([^"]+)"[^>]*>.*?Download.*?Video/i);
         
         // Extraire la caption
-        const captionMatch = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i) ||
-                            html.match(/<div[^>]*class="[^"]*caption[^"]*"[^>]*>([^<]+)<\/div>/i);
+        const captionMatch = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i);
         const caption = captionMatch ? captionMatch[1].trim() : '';
         
-        if (match && match[1]) {
-            const videoUrl = match[1];
-            console.log('✅ URL Instagram trouvée via SnapInsta');
+        if (videoMatch && videoMatch[1]) {
+            const videoUrl = videoMatch[1];
+            console.log('✅ URL Instagram trouvée via API');
             const videoPath = await downloadFromUrl(videoUrl, 'instagram');
             
             return { path: videoPath, caption: caption };
         }
     }
     
-    throw new Error('URL non trouvée via SnapInsta');
+    throw new Error('URL non trouvée via API');
+}
+
+// Instagram - Scraping mobile (NOUVEAU - Plus efficace)
+async function downloadInstagramMobile(url) {
+    // Nettoyer l'URL
+    let cleanUrl = url.replace(/\?.*$/, '');
+    if (!cleanUrl.endsWith('/')) cleanUrl += '/';
+    
+    const response = await axios.get(cleanUrl, {
+        headers: {
+            'User-Agent': 'Instagram 76.0.0.15.395 Android (24/7.0; 640dpi; 1440x2560; samsung; SM-G930F; herolte; samsungexynos8890; en_US; 138226743)',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',
+            'Cookie': 'sessionid=;'
+        },
+        timeout: 30000
+    });
+    
+    // Chercher les données JSON dans le HTML
+    const scriptMatch = response.data.match(/<script type="application\/ld\+json">({[^<]+})<\/script>/);
+    
+    if (scriptMatch) {
+        try {
+            const data = JSON.parse(scriptMatch[1]);
+            
+            // Extraire caption
+            const caption = data.articleBody || data.description || '';
+            
+            // Chercher l'URL vidéo
+            const videoUrl = data.video?.contentUrl || 
+                           data.contentUrl || 
+                           data.embedUrl;
+            
+            if (videoUrl) {
+                console.log('✅ URL trouvée via scraping mobile (JSON-LD)');
+                const videoPath = await downloadFromUrl(videoUrl, 'instagram');
+                return { path: videoPath, caption: caption };
+            }
+        } catch (e) {
+            console.log('Erreur parsing JSON-LD:', e.message);
+        }
+    }
+    
+    // Fallback: chercher dans les meta tags
+    const videoMetaMatch = response.data.match(/<meta property="og:video" content="([^"]+)"/i) ||
+                          response.data.match(/<meta property="og:video:secure_url" content="([^"]+)"/i);
+    
+    const captionMetaMatch = response.data.match(/<meta property="og:description" content="([^"]+)"/i);
+    const caption = captionMetaMatch ? captionMetaMatch[1] : '';
+    
+    if (videoMetaMatch && videoMetaMatch[1]) {
+        const videoUrl = videoMetaMatch[1];
+        console.log('✅ URL trouvée via meta tags');
+        const videoPath = await downloadFromUrl(videoUrl, 'instagram');
+        return { path: videoPath, caption: caption };
+    }
+    
+    throw new Error('URL vidéo non trouvée (mobile scraping)');
 }
 
 // Instagram - Scraping direct (fallback)

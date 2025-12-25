@@ -248,7 +248,7 @@ async function downloadVideo(url) {
     }
 }
 
-// ===== ADSGRAM =====
+// ===== ADSGRAM (Version 2024 mise à jour) =====
 elements.watchAdBtn.addEventListener('click', () => {
     showAd();
 });
@@ -261,55 +261,81 @@ function showAd() {
         return;
     }
     
-    const AdController = window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID });
-    
-    AdController.show().then(async () => {
-        // Pub vue avec succès
-        console.log('Pub vue avec succès');
+    try {
+        // Nouvelle méthode AdsGram (2024)
+        const AdController = window.Adsgram.init({ 
+            blockId: ADSGRAM_BLOCK_ID,
+            debug: false,
+            debugBannerType: 'FullscreenMedia'
+        });
         
-        if (tg?.HapticFeedback) {
-            tg.HapticFeedback.notificationOccurred('success');
-        }
-        
-        // Enregistrer côté serveur
-        try {
-            const response = await fetch(`${API_URL}/watch-ad`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ userId: userId })
-            });
+        // Afficher la pub
+        AdController.show().then((result) => {
+            // Pub vue avec succès
+            console.log('✅ Pub vue avec succès', result);
             
-            const data = await response.json();
-            
-            if (data.success) {
-                state.hasFreeTime = true;
-                state.freeTimeExpires = data.freeUntil;
-                
-                elements.adCard.classList.add('hidden');
-                showFreeTimeCard(120); // 2h = 120 minutes
-                
-                showMessage('success', '🎉 Super ! Vous avez 2h de téléchargements gratuits !');
-                
-                setTimeout(() => {
-                    hideMessage();
-                }, 3000);
+            if (tg?.HapticFeedback) {
+                tg.HapticFeedback.notificationOccurred('success');
             }
-        } catch (error) {
-            console.error('Erreur enregistrement pub:', error);
+            
+            // Enregistrer côté serveur
+            registerAdView();
+            
+        }).catch((error) => {
+            // Pub fermée prématurément ou erreur
+            console.log('⚠️ Pub non terminée:', error);
+            
+            if (error.message === 'Ad closed by user') {
+                showMessage('warning', 'Vous devez regarder la pub jusqu\'à la fin pour débloquer 2h gratuit');
+            } else if (error.message === 'No ads available') {
+                showMessage('error', 'Aucune pub disponible pour le moment. Réessayez dans quelques secondes.');
+            } else {
+                showMessage('error', 'Erreur lors du chargement de la pub. Réessayez.');
+            }
+            
+            if (tg?.HapticFeedback) {
+                tg.HapticFeedback.notificationOccurred('warning');
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur AdsGram:', error);
+        showMessage('error', 'Erreur lors de l\'initialisation de la publicité.');
+    }
+}
+
+// Fonction pour enregistrer la vue de pub
+async function registerAdView() {
+    try {
+        const response = await fetch(`${API_URL}/watch-ad`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ userId: userId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            state.hasFreeTime = true;
+            state.freeTimeExpires = data.freeUntil;
+            
+            elements.adCard.classList.add('hidden');
+            showFreeTimeCard(120); // 2h = 120 minutes
+            
+            showMessage('success', '🎉 Super ! Vous avez 2h de téléchargements gratuits !');
+            
+            setTimeout(() => {
+                hideMessage();
+            }, 3000);
+        } else {
             showMessage('error', 'Erreur lors de l\'activation. Réessayez.');
         }
-        
-    }).catch((error) => {
-        // Pub fermée ou erreur
-        console.log('Pub non terminée:', error);
-        showMessage('warning', 'Vous devez regarder la pub jusqu\'à la fin');
-        
-        if (tg?.HapticFeedback) {
-            tg.HapticFeedback.notificationOccurred('warning');
-        }
-    });
+    } catch (error) {
+        console.error('❌ Erreur enregistrement pub:', error);
+        showMessage('error', 'Erreur lors de l\'activation. Vérifiez votre connexion.');
+    }
 }
 
 // ===== UI HELPERS =====
