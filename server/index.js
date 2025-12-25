@@ -10,7 +10,7 @@ const { getUser, updateUserFreeTime, checkFreeTime } = require('./database');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const WEBAPP_URL = process.env.WEBAPP_URL || 'https://tik-dl1.vercel.app/';
+const WEBAPP_URL = process.env.WEBAPP_URL || 'https://tik-dl1.onrender.com';
 
 // ===== MIDDLEWARE =====
 app.use(cors());
