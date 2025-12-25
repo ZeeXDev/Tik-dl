@@ -1,20 +1,17 @@
 // ===== CONFIGURATION =====
-// ⚠️ CHANGE CETTE URL AVEC TON BACKEND RENDER !
-const API_URL = 'https://tik-dl1.onrender.com/api';  // ← À CHANGER
-const ADSGRAM_BLOCK_ID = 'int-19937';  // ← À CHANGER
+const API_URL = 'https://tik-dl1.onrender.com/api'; // ← TON BACKEND
+const ADSGRAM_BLOCK_ID = 'int-19937';               // ← TON BLOCK ID
 
 // ===== TELEGRAM WEB APP =====
 let tg = window.Telegram?.WebApp;
 let userId = null;
 
-// Initialisation Telegram
 if (tg) {
     tg.ready();
     tg.expand();
     userId = tg.initDataUnsafe?.user?.id;
     console.log('Telegram User ID:', userId);
 } else {
-    // Mode test sans Telegram
     userId = 123456789;
     console.warn('Mode test - Telegram WebApp non disponible');
 }
@@ -26,7 +23,6 @@ const elements = {
     platformDetected: document.getElementById('platformDetected'),
     platformName: document.getElementById('platformName'),
     downloadBtn: document.getElementById('downloadBtn'),
-    btnText: document.getElementById('btnText'),
     loadingState: document.getElementById('loadingState'),
     loadingText: document.getElementById('loadingText'),
     message: document.getElementById('message'),
@@ -38,7 +34,7 @@ const elements = {
     watchAdBtn: document.getElementById('watchAdBtn')
 };
 
-// ===== ÉTAT GLOBAL =====
+// ===== ÉTAT =====
 let state = {
     hasFreeTime: false,
     freeTimeExpires: null,
@@ -47,59 +43,42 @@ let state = {
     timerInterval: null
 };
 
-// ===== DÉTECTION PLATEFORME =====
+// ===== PLATEFORMES =====
 const platforms = {
-    tiktok: {
-        regex: /(tiktok\.com|vm\.tiktok\.com)/i,
-        name: 'TikTok',
-        icon: '🎵'
-    },
-    instagram: {
-        regex: /(instagram\.com|instagr\.am|ig\.me)/i,
-        name: 'Instagram',
-        icon: '📸'
-    },
-    pinterest: {
-        regex: /(pinterest\.com|pinterest\.fr|pinterest\.ca|pin\.it)/i,
-        name: 'Pinterest',
-        icon: '📌'
-    }
+    tiktok: { regex: /(tiktok\.com|vm\.tiktok\.com)/i, name: 'TikTok', icon: '🎵' },
+    instagram: { regex: /(instagram\.com|instagr\.am|ig\.me)/i, name: 'Instagram', icon: '📸' },
+    pinterest: { regex: /(pinterest\.com|pin\.it)/i, name: 'Pinterest', icon: '📌' }
 };
 
 function detectPlatform(url) {
-    for (let [key, platform] of Object.entries(platforms)) {
-        if (platform.regex.test(url)) {
-            return { key, ...platform };
-        }
+    for (let [key, p] of Object.entries(platforms)) {
+        if (p.regex.test(url)) return { key, ...p };
     }
     return null;
 }
 
-// ===== GESTION URL INPUT =====
-elements.videoUrl.addEventListener('input', (e) => {
+// ===== INPUT URL =====
+elements.videoUrl.addEventListener('input', e => {
     const url = e.target.value.trim();
-    
-    // Afficher/masquer bouton clear
     elements.clearBtn.classList.toggle('hidden', !url);
-    
-    // Détecter plateforme
-    if (url) {
-        const platform = detectPlatform(url);
-        if (platform) {
-            state.currentPlatform = platform;
-            elements.platformName.textContent = `${platform.icon} ${platform.name} détecté`;
-            elements.platformDetected.classList.remove('hidden');
-        } else {
-            elements.platformDetected.classList.add('hidden');
-            state.currentPlatform = null;
-        }
+
+    if (!url) {
+        elements.platformDetected.classList.add('hidden');
+        state.currentPlatform = null;
+        return;
+    }
+
+    const platform = detectPlatform(url);
+    if (platform) {
+        state.currentPlatform = platform;
+        elements.platformName.textContent = `${platform.icon} ${platform.name} détecté`;
+        elements.platformDetected.classList.remove('hidden');
     } else {
         elements.platformDetected.classList.add('hidden');
         state.currentPlatform = null;
     }
 });
 
-// Bouton clear
 elements.clearBtn.addEventListener('click', () => {
     elements.videoUrl.value = '';
     elements.clearBtn.classList.add('hidden');
@@ -107,234 +86,150 @@ elements.clearBtn.addEventListener('click', () => {
     state.currentPlatform = null;
 });
 
-// ===== VÉRIFICATION FREE TIME =====
+// ===== FREE TIME =====
 async function checkFreeTime() {
     try {
-        const response = await fetch(`${API_URL}/status/${userId}`);
-        const data = await response.json();
-        
+        const res = await fetch(`${API_URL}/status/${userId}`);
+        const data = await res.json();
+
         state.hasFreeTime = data.hasFreeTime;
-        state.freeTimeExpires = data.expiresAt;
-        
-        if (state.hasFreeTime) {
+
+        if (data.hasFreeTime) {
             showFreeTimeCard(data.remainingMinutes);
             elements.adCard.classList.add('hidden');
         } else {
             elements.freeTimeCard.classList.add('hidden');
             elements.adCard.classList.remove('hidden');
         }
-        
+
         return data;
-    } catch (error) {
-        console.error('Erreur check free time:', error);
+    } catch {
         return { hasFreeTime: false };
     }
 }
 
-// ===== AFFICHAGE TIMER =====
 function showFreeTimeCard(minutes) {
     elements.freeTimeCard.classList.remove('hidden');
     updateTimer(minutes);
-    
-    // Mettre à jour le timer chaque minute
-    if (state.timerInterval) clearInterval(state.timerInterval);
-    
-    state.timerInterval = setInterval(async () => {
-        const data = await checkFreeTime();
-        if (!data.hasFreeTime) {
-            clearInterval(state.timerInterval);
-            elements.freeTimeCard.classList.add('hidden');
-            elements.adCard.classList.remove('hidden');
-        }
-    }, 60000); // Chaque minute
+
+    clearInterval(state.timerInterval);
+    state.timerInterval = setInterval(checkFreeTime, 60000);
 }
 
 function updateTimer(minutes) {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    elements.timeRemaining.textContent = `${hours}h ${mins}min`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    elements.timeRemaining.textContent = `${h}h ${m}min`;
 }
 
-// ===== TÉLÉCHARGEMENT =====
+// ===== DOWNLOAD =====
 elements.downloadBtn.addEventListener('click', async () => {
     const url = elements.videoUrl.value.trim();
-    
-    // Validation
-    if (!url) {
-        showMessage('error', 'Veuillez entrer une URL valide');
-        return;
-    }
-    
-    if (!state.currentPlatform) {
-        showMessage('error', 'Plateforme non supportée. Utilisez TikTok, Instagram ou Pinterest.');
-        return;
-    }
-    
-    // Vérifier free time
+
+    if (!url) return showMessage('error', 'Veuillez entrer une URL valide');
+    if (!state.currentPlatform) return showMessage('error', 'Plateforme non supportée');
+
     const status = await checkFreeTime();
-    
     if (!status.hasFreeTime) {
-        showMessage('warning', 'Regardez une pub pour débloquer 2h de téléchargements gratuits 🎁');
+        showMessage('warning', 'Regardez une pub pour débloquer 2h 🎁');
         highlightAdCard();
         return;
     }
-    
-    // Lancer le téléchargement
-    await downloadVideo(url);
+
+    downloadVideo(url);
 });
 
 async function downloadVideo(url) {
     if (state.isLoading) return;
-    
+
     state.isLoading = true;
-    setLoadingState(true, 'Préparation du téléchargement...');
+    setLoadingState(true, 'Préparation...');
     hideMessage();
-    
+
     try {
-        const response = await fetch(`${API_URL}/download`, {
+        const res = await fetch(`${API_URL}/download`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                userId: userId,
-                url: url,
-                platform: state.currentPlatform.key
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId, url, platform: state.currentPlatform.key })
         });
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.message || 'Erreur lors du téléchargement');
-        }
-        
-        if (data.success) {
-            setLoadingState(true, 'Téléchargement en cours...');
-            
-            // Simuler progression
-            setTimeout(() => {
-                setLoadingState(true, 'Envoi de la vidéo...');
-            }, 1500);
-            
-            setTimeout(() => {
-                setLoadingState(false);
-                showMessage('success', '✅ Vidéo envoyée avec succès ! Vérifiez vos messages Telegram.');
-                
-                // Vibration si disponible
-                if (tg?.HapticFeedback) {
-                    tg.HapticFeedback.notificationOccurred('success');
-                }
-                
-                // Reset après 3 secondes
-                setTimeout(() => {
-                    elements.videoUrl.value = '';
-                    elements.clearBtn.classList.add('hidden');
-                    elements.platformDetected.classList.add('hidden');
-                    hideMessage();
-                }, 3000);
-            }, 3000);
-        }
-        
-    } catch (error) {
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message);
+
+        setTimeout(() => {
+            setLoadingState(false);
+            showMessage('success', '✅ Vidéo envoyée sur Telegram !');
+            tg?.HapticFeedback?.notificationOccurred('success');
+        }, 3000);
+
+    } catch (e) {
         setLoadingState(false);
-        showMessage('error', error.message || 'Une erreur est survenue');
-        
-        if (tg?.HapticFeedback) {
-            tg.HapticFeedback.notificationOccurred('error');
-        }
+        showMessage('error', e.message || 'Erreur');
+        tg?.HapticFeedback?.notificationOccurred('error');
     } finally {
         state.isLoading = false;
     }
 }
 
-// ===== ADSGRAM =====
-elements.watchAdBtn.addEventListener('click', () => {
-    showAd();
-});
+// ===================================================================
+// ======================= ADSGRAM (VERSION MODERNE) ==================
+// ===================================================================
+
+elements.watchAdBtn.addEventListener('click', showAd);
 
 function showAd() {
-    // Vérifier si AdsGram est chargé
-    if (typeof window.Adsgram === 'undefined') {
-        console.error('AdsGram SDK non chargé');
-        showMessage('error', 'Erreur de chargement de la publicité. Réessayez.');
+    if (!window.Adsgram?.showAd) {
+        showMessage('error', 'AdsGram non chargé');
         return;
     }
-    
-    const AdController = window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID });
-    
-    AdController.show().then(async () => {
-        // Pub vue avec succès
-        console.log('Pub vue avec succès');
-        
-        if (tg?.HapticFeedback) {
-            tg.HapticFeedback.notificationOccurred('success');
-        }
-        
-        // Enregistrer côté serveur
-        try {
-            const response = await fetch(`${API_URL}/watch-ad`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ userId: userId })
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                state.hasFreeTime = true;
-                state.freeTimeExpires = data.freeUntil;
-                
+
+    window.Adsgram.showAd({
+        blockId: ADSGRAM_BLOCK_ID,
+
+        onReward: async () => {
+            tg?.HapticFeedback?.notificationOccurred('success');
+
+            try {
+                const res = await fetch(`${API_URL}/watch-ad`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId })
+                });
+
+                const data = await res.json();
+                if (!data.success) throw new Error();
+
                 elements.adCard.classList.add('hidden');
-                showFreeTimeCard(120); // 2h = 120 minutes
-                
-                showMessage('success', '🎉 Super ! Vous avez 2h de téléchargements gratuits !');
-                
-                setTimeout(() => {
-                    hideMessage();
-                }, 3000);
+                showFreeTimeCard(120);
+                showMessage('success', '🎉 2h de téléchargements débloquées !');
+
+            } catch {
+                showMessage('error', 'Erreur activation récompense');
             }
-        } catch (error) {
-            console.error('Erreur enregistrement pub:', error);
-            showMessage('error', 'Erreur lors de l\'activation. Réessayez.');
-        }
-        
-    }).catch((error) => {
-        // Pub fermée ou erreur
-        console.log('Pub non terminée:', error);
-        showMessage('warning', 'Vous devez regarder la pub jusqu\'à la fin');
-        
-        if (tg?.HapticFeedback) {
-            tg.HapticFeedback.notificationOccurred('warning');
+        },
+
+        onClose: () => {
+            showMessage('warning', 'Vous devez regarder la pub jusqu’à la fin');
+        },
+
+        onError: (err) => {
+            console.error(err);
+            showMessage('error', 'Erreur publicité');
         }
     });
 }
 
-// ===== UI HELPERS =====
+// ===== UI =====
 function setLoadingState(loading, text = '') {
     elements.downloadBtn.disabled = loading;
     elements.loadingState.classList.toggle('hidden', !loading);
-    
-    if (text) {
-        elements.loadingText.textContent = text;
-    }
+    if (text) elements.loadingText.textContent = text;
 }
 
 function showMessage(type, text) {
-    elements.message.classList.remove('hidden', 'success', 'error', 'warning');
-    elements.message.classList.add(type);
+    elements.message.className = `message ${type}`;
     elements.messageText.textContent = text;
-    
-    // Changer l'icône selon le type
-    const iconPaths = {
-        success: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z',
-        error: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z',
-        warning: 'M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z'
-    };
-    
-    elements.messageIcon.innerHTML = `<path d="${iconPaths[type]}" fill="currentColor"/>`;
+    elements.message.classList.remove('hidden');
 }
 
 function hideMessage() {
@@ -348,27 +243,8 @@ function highlightAdCard() {
     }, 10);
 }
 
-// ===== INITIALISATION =====
-async function init() {
-    console.log('🚀 Initialisation de l\'app...');
-    
-    // Vérifier le statut free time
+// ===== INIT =====
+(async function init() {
     await checkFreeTime();
-    
-    // Configuration Telegram
-    if (tg) {
-        // Configurer le thème
-        document.documentElement.style.setProperty('--tg-theme-bg-color', tg.backgroundColor || '#0a0a0a');
-        document.documentElement.style.setProperty('--tg-theme-text-color', tg.textColor || '#ffffff');
-        
-        // Bouton back
-        tg.BackButton.onClick(() => {
-            tg.close();
-        });
-    }
-    
-    console.log('✅ App prête !');
-}
-
-// Lancer l'app
-init();
+    tg?.BackButton?.onClick(() => tg.close());
+})();
