@@ -328,21 +328,50 @@ async function downloadAndSend(userId, url, platform) {
         );
         
         // Télécharger la vidéo
-        const videoPath = await downloadVideo(url, platform);
+        const result = await downloadVideo(url, platform);
         
-        if (!videoPath) {
+        if (!result || !result.path) {
             throw new Error('Échec du téléchargement');
         }
         
+        const videoPath = result.path;
+        const caption = result.caption || '';
+        const author = result.author || '';
+        const music = result.music || '';
+        
         console.log(`✅ Vidéo téléchargée: ${videoPath}`);
+        if (caption) console.log(`📝 Caption: ${caption}`);
         
         // Supprimer le message de statut
         bot.deleteMessage(userId, statusMsg.message_id).catch(() => {});
         
+        // Construire la légende complète
+        let fullCaption = `✅ Vidéo ${platform.toUpperCase()}\n\n`;
+        
+        // Ajouter la légende originale si elle existe
+        if (caption) {
+            // Limiter la caption à 800 caractères (Telegram limite = 1024)
+            const truncatedCaption = caption.length > 800 ? caption.substring(0, 797) + '...' : caption;
+            fullCaption += `📝 ${truncatedCaption}\n\n`;
+        }
+        
+        // Ajouter l'auteur pour TikTok
+        if (platform === 'tiktok' && author) {
+            fullCaption += `👤 @${author}\n`;
+        }
+        
+        // Ajouter la musique pour TikTok
+        if (platform === 'tiktok' && music) {
+            fullCaption += `🎵 ${music}\n`;
+        }
+        
+        fullCaption += `\n🎥 Téléchargé avec Video Downloader`;
+        
         // Envoyer via bot
         await bot.sendVideo(userId, videoPath, {
-            caption: `✅ Voici votre vidéo ${platform.toUpperCase()} !\n\n🎥 Téléchargé avec Video Downloader\n⏰ Téléchargements gratuits restants : consultez l'app`,
-            supports_streaming: true
+            caption: fullCaption,
+            supports_streaming: true,
+            parse_mode: 'Markdown'
         });
         
         console.log(`📤 Vidéo envoyée à ${userId}`);
