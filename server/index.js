@@ -130,9 +130,9 @@ bot.on('message', async (msg) => {
         
         // Détecter la plateforme
         let platform = null;
-        if (url.includes('tiktok.com')) platform = 'tiktok';
-        else if (url.includes('instagram.com') || url.includes('instagr.am')) platform = 'instagram';
-        else if (url.includes('pinterest.com')) platform = 'pinterest';
+        if (url.match(/(tiktok\.com|vm\.tiktok\.com)/i)) platform = 'tiktok';
+        else if (url.match(/(instagram\.com|instagr\.am|ig\.me)/i)) platform = 'instagram';
+        else if (url.match(/(pinterest\.com|pinterest\.fr|pinterest\.ca|pin\.it)/i)) platform = 'pinterest';
         
         if (platform) {
             // Vérifier free time

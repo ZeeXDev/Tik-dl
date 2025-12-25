@@ -50,17 +50,17 @@ let state = {
 // ===== DÉTECTION PLATEFORME =====
 const platforms = {
     tiktok: {
-        regex: /tiktok\.com/i,
+        regex: /(tiktok\.com|vm\.tiktok\.com)/i,
         name: 'TikTok',
         icon: '🎵'
     },
     instagram: {
-        regex: /(instagram\.com|instagr\.am)/i,
+        regex: /(instagram\.com|instagr\.am|ig\.me)/i,
         name: 'Instagram',
         icon: '📸'
     },
     pinterest: {
-        regex: /pinterest\.(com|fr|ca)/i,
+        regex: /(pinterest\.com|pinterest\.fr|pinterest\.ca|pin\.it)/i,
         name: 'Pinterest',
         icon: '📌'
     }
