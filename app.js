@@ -166,7 +166,7 @@ elements.downloadBtn.addEventListener('click', async () => {
     }
     
     if (!state.currentPlatform) {
-        showMessage('error', 'Plateforme non supportée. Utilisez TikTok, Instagram ou Pinterest.');
+        showMessage('error', 'Plateforme non supportée. Utilisez TikTok.');
         return;
     }
     

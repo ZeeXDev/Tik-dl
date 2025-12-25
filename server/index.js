@@ -53,8 +53,6 @@ bot.onText(/\/start/, (msg) => {
         `Bienvenue sur **Video Downloader** 🎥\n\n` +
         `Je peux télécharger des vidéos depuis :\n` +
         `🎵 TikTok\n` +
-        `📸 Instagram\n` +
-        `📌 Pinterest\n\n` +
         `**Comment ça marche ?**\n` +
         `1️⃣ Clique sur le bouton ci-dessous\n` +
         `2️⃣ Regarde une pub (2h gratuit)\n` +
@@ -97,8 +95,6 @@ function sendHelpMessage(chatId) {
         `5. Je t'envoie la vidéo ici ! 📹\n\n` +
         `**✅ Plateformes supportées :**\n` +
         `• TikTok (sans watermark)\n` +
-        `• Instagram (Reels & Posts)\n` +
-        `• Pinterest\n\n` +
         `**⏰ Système gratuit :**\n` +
         `• 1 pub = 2h de téléchargements\n` +
         `• Illimité pendant 2h\n` +
@@ -176,9 +172,7 @@ bot.on('message', async (msg) => {
                 chatId,
                 `❌ Plateforme non supportée.\n\n` +
                 `J'accepte uniquement :\n` +
-                `🎵 TikTok\n` +
-                `📸 Instagram\n` +
-                `📌 Pinterest`
+                `🎵 TikTok`
             );
         }
     }
