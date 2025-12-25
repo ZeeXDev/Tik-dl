@@ -1,6 +1,7 @@
 // ===== CONFIGURATION =====
-const API_URL = 'https://tik-dl1.onrender.com/api'; // Change en production
-const ADSGRAM_BLOCK_ID = 'int-12345'; // À remplacer
+// ⚠️ CHANGE CETTE URL AVEC TON BACKEND RENDER !
+const API_URL = 'https://TON-BACKEND.onrender.com/api';  // ← À CHANGER
+const ADSGRAM_BLOCK_ID = 'TON_BLOCK_ID';  // ← À CHANGER
 
 // ===== TELEGRAM WEB APP =====
 let tg = window.Telegram?.WebApp;
@@ -218,7 +219,7 @@ async function downloadVideo(url) {
             
             setTimeout(() => {
                 setLoadingState(false);
-                showMessage('success', '✅ Vidéo envoyée avec succès ! Vérifiez vos messages.');
+                showMessage('success', '✅ Vidéo envoyée avec succès ! Vérifiez vos messages Telegram.');
                 
                 // Vibration si disponible
                 if (tg?.HapticFeedback) {
