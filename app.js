@@ -25,6 +25,10 @@ const elements = {
     clearBtn: document.getElementById('clearBtn'),
     platformDetected: document.getElementById('platformDetected'),
     platformName: document.getElementById('platformName'),
+    qualitySelector: document.getElementById('qualitySelector'),
+    qualitySelect: document.getElementById('qualitySelect'),
+    formatSelector: document.getElementById('formatSelector'),
+    formatSelect: document.getElementById('formatSelect'),
     downloadBtn: document.getElementById('downloadBtn'),
     btnText: document.getElementById('btnText'),
     loadingState: document.getElementById('loadingState'),
@@ -44,6 +48,8 @@ let state = {
     freeTimeExpires: null,
     isLoading: false,
     currentPlatform: null,
+    selectedQuality: '720p',
+    selectedFormat: 'mp4',
     timerInterval: null
 };
 
@@ -52,17 +58,30 @@ const platforms = {
     tiktok: {
         regex: /(tiktok\.com|vm\.tiktok\.com)/i,
         name: 'TikTok',
-        icon: '🎵'
+        icon: '🎵',
+        qualities: ['HD'], // TikTok n'a qu'une qualité HD
+        formats: ['mp4']
     },
     instagram: {
         regex: /(instagram\.com|instagr\.am|ig\.me)/i,
         name: 'Instagram',
-        icon: '📸'
+        icon: '📸',
+        qualities: ['Auto'], // Instagram détermine automatiquement
+        formats: ['mp4']
     },
     pinterest: {
         regex: /(pinterest\.com|pinterest\.fr|pinterest\.ca|pin\.it)/i,
         name: 'Pinterest',
-        icon: '📌'
+        icon: '📌',
+        qualities: ['Auto'],
+        formats: ['mp4']
+    },
+    youtube: {
+        regex: /(youtube\.com|youtu\.be)/i,
+        name: 'YouTube',
+        icon: '🎥',
+        qualities: ['360p', '480p', '720p', '1080p', '1440p', '2160p'],
+        formats: ['mp4', 'mp3']
     }
 };
 
@@ -89,12 +108,17 @@ elements.videoUrl.addEventListener('input', (e) => {
             state.currentPlatform = platform;
             elements.platformName.textContent = `${platform.icon} ${platform.name} détecté`;
             elements.platformDetected.classList.remove('hidden');
+            
+            // Afficher les options de qualité/format selon la plateforme
+            updateQualityOptions(platform);
         } else {
             elements.platformDetected.classList.add('hidden');
+            hideQualityOptions();
             state.currentPlatform = null;
         }
     } else {
         elements.platformDetected.classList.add('hidden');
+        hideQualityOptions();
         state.currentPlatform = null;
     }
 });
@@ -104,7 +128,56 @@ elements.clearBtn.addEventListener('click', () => {
     elements.videoUrl.value = '';
     elements.clearBtn.classList.add('hidden');
     elements.platformDetected.classList.add('hidden');
+    hideQualityOptions();
     state.currentPlatform = null;
+});
+
+// ===== GESTION QUALITÉ/FORMAT =====
+function updateQualityOptions(platform) {
+    // Afficher les sélecteurs seulement pour YouTube
+    if (platform.key === 'youtube') {
+        // Remplir les options de qualité
+        elements.qualitySelect.innerHTML = platform.qualities
+            .map(q => `<option value="${q.toLowerCase()}" ${q === '720p' ? 'selected' : ''}>${q}</option>`)
+            .join('');
+        
+        // Remplir les options de format
+        elements.formatSelect.innerHTML = platform.formats
+            .map(f => `<option value="${f}" ${f === 'mp4' ? 'selected' : ''}>${f.toUpperCase()}</option>`)
+            .join('');
+        
+        elements.qualitySelector.classList.remove('hidden');
+        elements.formatSelector.classList.remove('hidden');
+        
+        // Mettre à jour l'état
+        state.selectedQuality = '720p';
+        state.selectedFormat = 'mp4';
+    } else {
+        hideQualityOptions();
+    }
+}
+
+function hideQualityOptions() {
+    elements.qualitySelector.classList.add('hidden');
+    elements.formatSelector.classList.add('hidden');
+}
+
+// Écouter les changements de qualité/format
+elements.qualitySelect?.addEventListener('change', (e) => {
+    state.selectedQuality = e.target.value;
+    console.log('Qualité sélectionnée:', state.selectedQuality);
+});
+
+elements.formatSelect?.addEventListener('change', (e) => {
+    state.selectedFormat = e.target.value;
+    console.log('Format sélectionné:', state.selectedFormat);
+    
+    // Si MP3 est sélectionné, masquer les options de qualité
+    if (e.target.value === 'mp3') {
+        elements.qualitySelector.classList.add('hidden');
+    } else {
+        elements.qualitySelector.classList.remove('hidden');
+    }
 });
 
 // ===== VÉRIFICATION FREE TIME =====
@@ -166,7 +239,7 @@ elements.downloadBtn.addEventListener('click', async () => {
     }
     
     if (!state.currentPlatform) {
-        showMessage('error', 'Plateforme non supportée. Utilisez TikTok.');
+        showMessage('error', 'Plateforme non supportée. Utilisez TikTok, Instagram, Pinterest ou YouTube.');
         return;
     }
     
@@ -187,20 +260,39 @@ async function downloadVideo(url) {
     if (state.isLoading) return;
     
     state.isLoading = true;
-    setLoadingState(true, 'Préparation du téléchargement...');
+    
+    // Message de chargement adapté selon la plateforme et format
+    let loadingMsg = 'Préparation du téléchargement...';
+    if (state.currentPlatform.key === 'youtube') {
+        if (state.selectedFormat === 'mp3') {
+            loadingMsg = 'Extraction audio en cours...';
+        } else {
+            loadingMsg = `Téléchargement ${state.selectedQuality} en cours...`;
+        }
+    }
+    
+    setLoadingState(true, loadingMsg);
     hideMessage();
     
     try {
+        const requestBody = {
+            userId: userId,
+            url: url,
+            platform: state.currentPlatform.key
+        };
+        
+        // Ajouter les options YouTube si applicable
+        if (state.currentPlatform.key === 'youtube') {
+            requestBody.quality = state.selectedQuality;
+            requestBody.format = state.selectedFormat;
+        }
+        
         const response = await fetch(`${API_URL}/download`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                userId: userId,
-                url: url,
-                platform: state.currentPlatform.key
-            })
+            body: JSON.stringify(requestBody)
         });
         
         const data = await response.json();
@@ -210,16 +302,33 @@ async function downloadVideo(url) {
         }
         
         if (data.success) {
-            setLoadingState(true, 'Téléchargement en cours...');
-            
-            // Simuler progression
-            setTimeout(() => {
-                setLoadingState(true, 'Envoi de la vidéo...');
-            }, 1500);
+            // Messages de progression selon le type
+            if (state.currentPlatform.key === 'youtube' && state.selectedFormat === 'mp3') {
+                setLoadingState(true, 'Conversion en MP3...');
+                setTimeout(() => {
+                    setLoadingState(true, 'Envoi du fichier audio...');
+                }, 2000);
+            } else {
+                setLoadingState(true, 'Téléchargement en cours...');
+                setTimeout(() => {
+                    setLoadingState(true, 'Optimisation vidéo...');
+                }, 1500);
+                setTimeout(() => {
+                    setLoadingState(true, 'Envoi vers Telegram...');
+                }, 3000);
+            }
             
             setTimeout(() => {
                 setLoadingState(false);
-                showMessage('success', '✅ Vidéo envoyée avec succès ! Vérifiez vos messages Telegram.');
+                
+                let successMsg = '✅ Vidéo envoyée avec succès !';
+                if (state.currentPlatform.key === 'youtube' && state.selectedFormat === 'mp3') {
+                    successMsg = '✅ Audio MP3 envoyé avec succès !';
+                } else if (state.currentPlatform.key === 'youtube') {
+                    successMsg = `✅ Vidéo ${state.selectedQuality} envoyée avec succès !`;
+                }
+                
+                showMessage('success', successMsg + ' Vérifiez vos messages Telegram.');
                 
                 // Vibration si disponible
                 if (tg?.HapticFeedback) {
@@ -231,14 +340,27 @@ async function downloadVideo(url) {
                     elements.videoUrl.value = '';
                     elements.clearBtn.classList.add('hidden');
                     elements.platformDetected.classList.add('hidden');
+                    hideQualityOptions();
                     hideMessage();
                 }, 3000);
-            }, 3000);
+            }, state.selectedFormat === 'mp3' ? 3000 : 4500);
         }
         
     } catch (error) {
         setLoadingState(false);
-        showMessage('error', error.message || 'Une erreur est survenue');
+        
+        let errorMsg = error.message || 'Une erreur est survenue';
+        
+        // Messages d'erreur personnalisés
+        if (errorMsg.includes('yt-dlp')) {
+            errorMsg = 'Erreur YouTube : Le serveur ne peut pas télécharger cette vidéo pour le moment.';
+        } else if (errorMsg.includes('Pinterest')) {
+            errorMsg = 'Cette vidéo Pinterest ne peut pas être téléchargée. Vérifiez que c\'est bien une vidéo.';
+        } else if (errorMsg.includes('Instagram')) {
+            errorMsg = 'Vidéo Instagram introuvable. Le compte est peut-être privé.';
+        }
+        
+        showMessage('error', errorMsg);
         
         if (tg?.HapticFeedback) {
             tg.HapticFeedback.notificationOccurred('error');
@@ -346,6 +468,10 @@ function setLoadingState(loading, text = '') {
     if (text) {
         elements.loadingText.textContent = text;
     }
+    
+    // Désactiver aussi les sélecteurs pendant le chargement
+    if (elements.qualitySelect) elements.qualitySelect.disabled = loading;
+    if (elements.formatSelect) elements.formatSelect.disabled = loading;
 }
 
 function showMessage(type, text) {
@@ -374,12 +500,39 @@ function highlightAdCard() {
     }, 10);
 }
 
+// ===== DÉTECTION CAPACITÉS SERVEUR =====
+async function checkServerCapabilities() {
+    try {
+        const response = await fetch(`${API_URL}/capabilities`);
+        const data = await response.json();
+        
+        console.log('📊 Capacités serveur:', data);
+        
+        // Afficher un badge si FFmpeg est disponible
+        if (data.ffmpeg) {
+            console.log('✅ FFmpeg disponible - Qualité optimale activée');
+        }
+        
+        if (data.ytdlp) {
+            console.log('✅ yt-dlp disponible - YouTube haute qualité activé');
+        }
+        
+        return data;
+    } catch (error) {
+        console.warn('⚠️ Impossible de vérifier les capacités serveur');
+        return { ffmpeg: false, ytdlp: false };
+    }
+}
+
 // ===== INITIALISATION =====
 async function init() {
     console.log('🚀 Initialisation de l\'app...');
     
     // Vérifier le statut free time
     await checkFreeTime();
+    
+    // Vérifier les capacités du serveur
+    await checkServerCapabilities();
     
     // Configuration Telegram
     if (tg) {

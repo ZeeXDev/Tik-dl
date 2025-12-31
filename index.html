@@ -84,6 +84,51 @@
                     <span id="platformName"></span>
                 </div>
             </div>
+            
+            <!-- Ajouter après l'élément platformDetected -->
+
+<!-- Message de plateforme détectée -->
+            <div id="platformDetected" class="platform-detected hidden">
+           <span id="platformName"></span>
+            </div>
+
+<!-- ⭐ NOUVEAUX SÉLECTEURS DE QUALITÉ (YouTube uniquement) -->
+<!-- Sélecteur de qualité -->
+<div id="qualitySelector" class="quality-selector hidden">
+    <label for="qualitySelect">
+        <span class="quality-icon">🎬</span>
+        Qualité vidéo
+    </label>
+    <select id="qualitySelect" class="quality-select">
+        <option value="360p">360p (Léger)</option>
+        <option value="480p">480p (Standard)</option>
+        <option value="720p" selected>720p HD (Recommandé)</option>
+        <option value="1080p">1080p Full HD</option>
+        <option value="1440p">1440p 2K</option>
+        <option value="2160p">2160p 4K</option>
+    </select>
+</div>
+
+<!-- Sélecteur de format -->
+<div id="formatSelector" class="format-selector hidden">
+    <label for="formatSelect">
+        <span class="format-icon">📄</span>
+        Format
+    </label>
+    <select id="formatSelect" class="format-select">
+        <option value="mp4" selected>MP4 (Vidéo)</option>
+        <option value="mp3">MP3 (Audio uniquement)</option>
+    </select>
+</div>
+
+<!-- Bouton de téléchargement -->
+<button id="downloadBtn" class="download-btn">
+    <span id="btnText">📥 Télécharger</span>
+    <div id="loadingState" class="loading-state hidden">
+        <div class="spinner"></div>
+        <span id="loadingText">Téléchargement...</span>
+    </div>
+</button>
 
             <button id="downloadBtn" class="download-btn">
                 <svg class="btn-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
