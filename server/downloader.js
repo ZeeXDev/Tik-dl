@@ -2,18 +2,43 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
 
 // ===== CONFIGURATION =====
 const DOWNLOAD_DIR = path.join(__dirname, '../downloads');
+const TEMP_DIR = path.join(__dirname, '../temp');
 
-// Créer le dossier downloads s'il n'existe pas
-if (!fs.existsSync(DOWNLOAD_DIR)) {
-    fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
-    console.log('📁 Dossier downloads créé');
+// Créer les dossiers s'ils n'existent pas
+[DOWNLOAD_DIR, TEMP_DIR].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+        console.log(`📁 Dossier créé: ${dir}`);
+    }
+});
+
+// ===== VÉRIFIER FFMPEG =====
+async function checkFFmpeg() {
+    try {
+        await execPromise('ffmpeg -version');
+        return true;
+    } catch (error) {
+        console.warn('⚠️ FFmpeg non trouvé. Installez-le pour de meilleures qualités vidéo.');
+        return false;
+    }
 }
 
+let FFMPEG_AVAILABLE = false;
+checkFFmpeg().then(available => {
+    FFMPEG_AVAILABLE = available;
+    if (available) {
+        console.log('✅ FFmpeg détecté et prêt');
+    }
+});
+
 // ===== FONCTION PRINCIPALE =====
-async function downloadVideo(url, platform) {
+async function downloadVideo(url, platform, options = {}) {
     console.log(`🎬 Téléchargement ${platform}: ${url}`);
     
     try {
@@ -21,13 +46,16 @@ async function downloadVideo(url, platform) {
         
         switch (platform) {
             case 'tiktok':
-                result = await downloadTikTok(url);
+                result = await downloadTikTok(url, options);
                 break;
             case 'instagram':
                 result = await downloadInstagram(url);
                 break;
             case 'pinterest':
                 result = await downloadPinterest(url);
+                break;
+            case 'youtube':
+                result = await downloadYouTube(url, options);
                 break;
             default:
                 throw new Error('Plateforme non supportée');
@@ -41,14 +69,179 @@ async function downloadVideo(url, platform) {
     }
 }
 
-// ===== TIKTOK - HD avec TikWM API + Caption =====
-async function downloadTikTok(url) {
+// ===== YOUTUBE - Avec sélection de qualité =====
+async function downloadYouTube(url, options = {}) {
+    try {
+        console.log('🎥 Téléchargement YouTube...');
+        
+        // Qualité demandée (par défaut 720p)
+        const quality = options.quality || '720p';
+        const format = options.format || 'mp4'; // mp4 ou mp3
+        
+        console.log(`📊 Qualité demandée: ${quality} (${format})`);
+        
+        // Méthode 1: yt-dlp (RECOMMANDÉ - meilleure qualité)
+        if (await checkYtDlp()) {
+            return await downloadYouTubeYtDlp(url, quality, format);
+        }
+        
+        // Méthode 2: API externe (fallback)
+        return await downloadYouTubeAPI(url, quality, format);
+        
+    } catch (error) {
+        console.error('❌ Erreur YouTube:', error.message);
+        throw new Error('Impossible de télécharger cette vidéo YouTube. Vérifiez le lien.');
+    }
+}
+
+// YouTube - avec yt-dlp (MEILLEURE MÉTHODE)
+async function checkYtDlp() {
+    try {
+        await execPromise('yt-dlp --version');
+        return true;
+    } catch (error) {
+        console.log('⚠️ yt-dlp non installé, utilisation API externe...');
+        return false;
+    }
+}
+
+async function downloadYouTubeYtDlp(url, quality, format) {
+    const filename = `youtube_${Date.now()}`;
+    const outputPath = path.join(DOWNLOAD_DIR, filename);
+    
+    let command;
+    
+    if (format === 'mp3') {
+        // Télécharger en MP3
+        command = `yt-dlp -x --audio-format mp3 --audio-quality 0 -o "${outputPath}.%(ext)s" "${url}"`;
+    } else {
+        // Télécharger vidéo avec qualité spécifique
+        const qualityMap = {
+            '2160p': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]',
+            '1440p': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
+            '1080p': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
+            '720p': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+            '480p': 'bestvideo[height<=480]+bestaudio/best[height<=480]',
+            '360p': 'bestvideo[height<=360]+bestaudio/best[height<=360]'
+        };
+        
+        const formatSelector = qualityMap[quality] || qualityMap['720p'];
+        command = `yt-dlp -f "${formatSelector}" --merge-output-format mp4 -o "${outputPath}.%(ext)s" "${url}"`;
+    }
+    
+    console.log('⬇️ Téléchargement avec yt-dlp...');
+    
+    try {
+        const { stdout } = await execPromise(command, { 
+            maxBuffer: 1024 * 1024 * 10,
+            timeout: 300000 // 5 minutes
+        });
+        
+        // Trouver le fichier téléchargé
+        const files = fs.readdirSync(DOWNLOAD_DIR);
+        const downloadedFile = files.find(f => f.startsWith(filename));
+        
+        if (!downloadedFile) {
+            throw new Error('Fichier téléchargé introuvable');
+        }
+        
+        const finalPath = path.join(DOWNLOAD_DIR, downloadedFile);
+        const stats = fs.statSync(finalPath);
+        const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+        
+        console.log(`✅ YouTube téléchargé: ${downloadedFile} (${fileSizeMB} MB)`);
+        
+        // Extraire les métadonnées
+        const titleMatch = stdout.match(/\[download\] Destination: (.+)/);
+        const title = titleMatch ? path.basename(titleMatch[1], path.extname(titleMatch[1])) : 'Video YouTube';
+        
+        return {
+            path: finalPath,
+            caption: title,
+            quality: quality,
+            format: format
+        };
+        
+    } catch (error) {
+        throw new Error('Erreur yt-dlp: ' + error.message);
+    }
+}
+
+// YouTube - API externe (fallback)
+async function downloadYouTubeAPI(url, quality, format) {
+    try {
+        // Extraire l'ID de la vidéo
+        const videoId = extractYouTubeId(url);
+        if (!videoId) {
+            throw new Error('ID vidéo YouTube invalide');
+        }
+        
+        console.log('🔍 Recherche des formats disponibles...');
+        
+        // Utiliser l'API Co-Cobalt (gratuite et sans watermark)
+        const response = await axios.post('https://api.cobalt.tools/api/json', {
+            url: url,
+            vCodec: 'h264',
+            vQuality: quality.replace('p', ''),
+            aFormat: format === 'mp3' ? 'mp3' : 'best',
+            isAudioOnly: format === 'mp3'
+        }, {
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            timeout: 30000
+        });
+        
+        if (response.data.status === 'error') {
+            throw new Error(response.data.text || 'Erreur API Cobalt');
+        }
+        
+        const downloadUrl = response.data.url;
+        if (!downloadUrl) {
+            throw new Error('URL de téléchargement non disponible');
+        }
+        
+        console.log('✅ URL YouTube récupérée, téléchargement...');
+        
+        const extension = format === 'mp3' ? 'mp3' : 'mp4';
+        const videoPath = await downloadFromUrl(downloadUrl, 'youtube', extension);
+        
+        return {
+            path: videoPath,
+            caption: response.data.filename || 'Video YouTube',
+            quality: quality,
+            format: format
+        };
+        
+    } catch (error) {
+        console.error('❌ Erreur API YouTube:', error.message);
+        throw new Error('Impossible de télécharger via API. Installez yt-dlp pour de meilleurs résultats.');
+    }
+}
+
+function extractYouTubeId(url) {
+    const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&?\/\s]{11})/,
+        /^([^&?\/\s]{11})$/
+    ];
+    
+    for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) return match[1];
+    }
+    
+    return null;
+}
+
+// ===== TIKTOK - HD avec TikWM API + FFmpeg pour qualité maximale =====
+async function downloadTikTok(url, options = {}) {
     try {
         console.log('🎵 Utilisation TikWM API (HD, sans watermark)...');
         
         const response = await axios.post('https://www.tikwm.com/api/', {
             url: url,
-            hd: 1  // HD activé
+            hd: 1
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -61,26 +254,28 @@ async function downloadTikTok(url) {
             throw new Error('Erreur API TikWM: ' + (response.data.msg || 'Vidéo non disponible'));
         }
         
-        // Récupérer les données
         const data = response.data.data;
-        
-        // Priorité : HD > play (normal)
         const videoUrl = data.hdplay || data.play;
         
         if (!videoUrl) {
             throw new Error('URL vidéo TikTok non trouvée');
         }
         
-        // Récupérer la légende/description
         const caption = data.title || '';
         const author = data.author?.nickname || data.author?.unique_id || 'Utilisateur TikTok';
         const music = data.music || '';
         
-        console.log('✅ URL TikTok HD récupérée, téléchargement...');
+        console.log('✅ URL TikTok HD récupérée');
         console.log('📝 Caption:', caption);
         
         // Télécharger la vidéo
-        const videoPath = await downloadFromUrl(videoUrl, 'tiktok');
+        let videoPath = await downloadFromUrl(videoUrl, 'tiktok');
+        
+        // Si FFmpeg est disponible, optimiser la qualité
+        if (FFMPEG_AVAILABLE && options.optimize !== false) {
+            console.log('🎨 Optimisation avec FFmpeg...');
+            videoPath = await optimizeVideoWithFFmpeg(videoPath, 'tiktok');
+        }
         
         return {
             path: videoPath,
@@ -91,7 +286,56 @@ async function downloadTikTok(url) {
         
     } catch (error) {
         console.error('❌ Erreur TikWM:', error.message);
-        throw new Error('Impossible de télécharger cette vidéo TikTok. Le lien est peut-être invalide ou la vidéo a été supprimée.');
+        throw new Error('Impossible de télécharger cette vidéo TikTok.');
+    }
+}
+
+// ===== OPTIMISER VIDÉO AVEC FFMPEG =====
+async function optimizeVideoWithFFmpeg(inputPath, platform) {
+    try {
+        const outputPath = inputPath.replace('.mp4', '_optimized.mp4');
+        
+        // Paramètres FFmpeg pour qualité maximale
+        let command;
+        
+        if (platform === 'tiktok') {
+            // Pour TikTok: conserver qualité HD, optimiser compression
+            command = `ffmpeg -i "${inputPath}" -c:v libx264 -preset slow -crf 18 -c:a aac -b:a 192k -movflags +faststart "${outputPath}" -y`;
+        } else {
+            // Pour autres plateformes: qualité élevée générale
+            command = `ffmpeg -i "${inputPath}" -c:v libx264 -preset medium -crf 20 -c:a aac -b:a 128k -movflags +faststart "${outputPath}" -y`;
+        }
+        
+        console.log('🔄 Optimisation en cours...');
+        
+        await execPromise(command, {
+            maxBuffer: 1024 * 1024 * 50,
+            timeout: 180000
+        });
+        
+        // Vérifier que l'optimisation a réussi
+        if (fs.existsSync(outputPath)) {
+            const inputStats = fs.statSync(inputPath);
+            const outputStats = fs.statSync(outputPath);
+            
+            const inputSizeMB = (inputStats.size / (1024 * 1024)).toFixed(2);
+            const outputSizeMB = (outputStats.size / (1024 * 1024)).toFixed(2);
+            
+            console.log(`✅ Vidéo optimisée: ${inputSizeMB}MB → ${outputSizeMB}MB`);
+            
+            // Supprimer l'original
+            fs.unlinkSync(inputPath);
+            
+            return outputPath;
+        } else {
+            console.warn('⚠️ Optimisation échouée, utilisation vidéo originale');
+            return inputPath;
+        }
+        
+    } catch (error) {
+        console.error('⚠️ Erreur FFmpeg:', error.message);
+        console.log('Utilisation de la vidéo originale...');
+        return inputPath;
     }
 }
 
@@ -102,7 +346,7 @@ async function downloadInstagram(url) {
     let videoPath = null;
     let caption = '';
     
-    // Méthode 1 : SaveFrom API (NOUVELLE)
+    // Méthode 1 : SaveFrom API
     try {
         console.log('Tentative SaveFrom API...');
         const result = await downloadInstagramSaveFrom(url);
@@ -112,7 +356,7 @@ async function downloadInstagram(url) {
         console.log('SaveFrom échoué:', error.message);
     }
     
-    // Méthode 2 : SnapInsta API (NOUVELLE)
+    // Méthode 2 : SnapInsta API
     if (!videoPath) {
         try {
             console.log('Tentative SnapInsta API...');
@@ -137,7 +381,7 @@ async function downloadInstagram(url) {
     }
     
     if (!videoPath) {
-        throw new Error('Impossible de télécharger cette vidéo Instagram. Vérifiez que le compte n\'est pas privé et que c\'est bien une vidéo.');
+        throw new Error('Impossible de télécharger cette vidéo Instagram.');
     }
     
     return {
@@ -160,16 +404,12 @@ async function downloadInstagramSaveFrom(url) {
     );
     
     if (response.data && response.data.data) {
-        // Parser le HTML pour trouver l'URL vidéo
         const html = response.data.data;
         const match = html.match(/href="([^"]+)"[^>]*download[^>]*>.*?Download/i);
         
         if (match && match[1]) {
             const videoUrl = match[1];
-            
-            // Extraire la caption depuis le HTML
-            const captionMatch = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i) ||
-                                html.match(/<div[^>]*class="[^"]*caption[^"]*"[^>]*>([^<]+)<\/div>/i);
+            const captionMatch = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i);
             const caption = captionMatch ? captionMatch[1].trim() : '';
             
             console.log('✅ URL Instagram trouvée via SaveFrom');
@@ -189,8 +429,7 @@ async function downloadInstagramSnapInsta(url) {
         {
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
             timeout: 20000
         }
@@ -198,23 +437,16 @@ async function downloadInstagramSnapInsta(url) {
     
     if (response.data && response.data.data) {
         const html = response.data.data;
-        
-        // Chercher l'URL de la vidéo HD
         const hdMatch = html.match(/href="([^"]+)"[^>]*>.*?HD.*?<\/a>/i);
         const normalMatch = html.match(/href="([^"]+)"[^>]*download[^>]*>/i);
-        
         const match = hdMatch || normalMatch;
         
-        // Extraire la caption
-        const captionMatch = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i) ||
-                            html.match(/<div[^>]*class="[^"]*caption[^"]*"[^>]*>([^<]+)<\/div>/i);
+        const captionMatch = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i);
         const caption = captionMatch ? captionMatch[1].trim() : '';
         
         if (match && match[1]) {
-            const videoUrl = match[1];
             console.log('✅ URL Instagram trouvée via SnapInsta');
-            const videoPath = await downloadFromUrl(videoUrl, 'instagram');
-            
+            const videoPath = await downloadFromUrl(match[1], 'instagram');
             return { path: videoPath, caption: caption };
         }
     }
@@ -222,96 +454,66 @@ async function downloadInstagramSnapInsta(url) {
     throw new Error('URL non trouvée via SnapInsta');
 }
 
-// Instagram - Scraping direct (fallback)
+// Instagram - Scraping direct
 async function downloadInstagramScraping(url) {
-    console.log('📸 Scraping direct Instagram...');
-    
-    // Nettoyer l'URL
     let cleanUrl = url;
-    if (url.includes('?')) {
-        cleanUrl = url.split('?')[0];
-    }
-    if (!cleanUrl.endsWith('/')) {
-        cleanUrl += '/';
-    }
+    if (url.includes('?')) cleanUrl = url.split('?')[0];
+    if (!cleanUrl.endsWith('/')) cleanUrl += '/';
     
     const response = await axios.get(cleanUrl, {
         headers: {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive'
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)',
+            'Accept': 'text/html,application/xhtml+xml'
         },
         timeout: 30000
     });
     
-    // Chercher la caption/description
     const captionMatch = response.data.match(/"edge_media_to_caption":\s*\{\s*"edges":\s*\[\s*\{\s*"node":\s*\{\s*"text":\s*"([^"]+)"/);
-    const caption = captionMatch ? captionMatch[1].replace(/\\n/g, '\n').replace(/\\u[\dA-F]{4}/gi, '') : '';
+    const caption = captionMatch ? captionMatch[1].replace(/\\n/g, '\n') : '';
     
-    // Chercher l'URL vidéo dans différents formats
     const patterns = [
         /"video_url":"([^"]+)"/,
         /"playback_url":"([^"]+)"/,
-        /video_url=([^&]+)/,
         /"src":"([^"]*\.mp4[^"]*)"/
     ];
     
     for (const pattern of patterns) {
         const match = response.data.match(pattern);
         if (match && match[1]) {
-            let videoUrl = match[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/\\/g, '');
+            let videoUrl = match[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
             console.log('✅ URL vidéo trouvée via scraping');
             const videoPath = await downloadFromUrl(videoUrl, 'instagram');
-            
             return { path: videoPath, caption: caption };
         }
     }
     
-    throw new Error('URL vidéo non trouvée dans le HTML');
+    throw new Error('URL vidéo non trouvée');
 }
 
-// ===== PINTEREST - Amélioré avec meilleure détection + Caption =====
+// ===== PINTEREST =====
 async function downloadPinterest(url) {
     try {
         console.log('📌 Scraping Pinterest...');
         
-        // Nettoyer l'URL
         let cleanUrl = url;
         if (url.includes('pin.it')) {
-            // Résoudre les URLs raccourcies
-            const response = await axios.get(url, {
-                maxRedirects: 5,
-                validateStatus: () => true
-            });
+            const response = await axios.get(url, { maxRedirects: 5, validateStatus: () => true });
             cleanUrl = response.request.res.responseUrl || url;
         }
         
-        console.log('📌 URL Pinterest:', cleanUrl);
-        
         const response = await axios.get(cleanUrl, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
             timeout: 30000
         });
         
-        // Extraire la description/caption
         const descMatch = response.data.match(/"description":"([^"]+)"/);
         const caption = descMatch ? descMatch[1].replace(/\\n/g, '\n') : '';
         
-        // Chercher les URLs vidéo dans différents formats
         const patterns = [
             /"contentUrl":"([^"]+)"/,
             /"video_list":\s*\{[^}]*"V_720P":\s*\{[^}]*"url":"([^"]+)"/,
-            /"video_list":\s*\{[^}]*"V_HLSV4":\s*\{[^}]*"url":"([^"]+)"/,
-            /"videos":\s*\{[^}]*"video_list":\s*\{[^}]*"V_\w+":\s*\{[^}]*"url":"([^"]+)"/,
             /"url":"(https:\/\/[^"]*\.mp4[^"]*)"/
         ];
         
@@ -321,136 +523,107 @@ async function downloadPinterest(url) {
                 let videoUrl = match[1].replace(/\\/g, '');
                 console.log('✅ URL Pinterest trouvée');
                 const videoPath = await downloadFromUrl(videoUrl, 'pinterest');
-                
                 return { path: videoPath, caption: caption };
             }
         }
         
-        throw new Error('URL vidéo Pinterest non trouvée dans le HTML');
+        throw new Error('URL vidéo Pinterest non trouvée');
         
     } catch (error) {
-        console.error('❌ Erreur Pinterest:', error.message);
-        throw new Error('Impossible de télécharger cette vidéo Pinterest. Vérifiez que le lien contient bien une vidéo et non une image.');
+        throw new Error('Impossible de télécharger cette vidéo Pinterest.');
     }
 }
 
-// ===== TÉLÉCHARGER DEPUIS URL (avec meilleure qualité) =====
-async function downloadFromUrl(videoUrl, platform) {
+// ===== TÉLÉCHARGER DEPUIS URL =====
+async function downloadFromUrl(videoUrl, platform, extension = 'mp4') {
     try {
-        const filename = `${platform}_${Date.now()}.mp4`;
+        const filename = `${platform}_${Date.now()}.${extension}`;
         const filepath = path.join(DOWNLOAD_DIR, filename);
         
-        console.log(`⬇️ Téléchargement de la vidéo HD...`);
+        console.log(`⬇️ Téléchargement de la vidéo...`);
         
         const response = await axios({
             method: 'GET',
             url: videoUrl,
             responseType: 'stream',
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Referer': `https://www.${platform}.com/`,
-                'Accept': '*/*',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
+                'Accept': '*/*'
             },
-            timeout: 180000, // 3 minutes pour les vidéos HD
+            timeout: 180000,
             maxRedirects: 10,
-            maxContentLength: 100 * 1024 * 1024 // Max 100MB
+            maxContentLength: 200 * 1024 * 1024 // Max 200MB
         });
         
         const writer = fs.createWriteStream(filepath);
         response.data.pipe(writer);
         
         return new Promise((resolve, reject) => {
-            let downloadedSize = 0;
-            
-            response.data.on('data', (chunk) => {
-                downloadedSize += chunk.length;
-            });
-            
             writer.on('finish', () => {
                 const stats = fs.statSync(filepath);
                 const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
                 
-                // Vérifier que le fichier n'est pas trop petit (erreur)
-                if (stats.size < 10000) { // Moins de 10KB
+                if (stats.size < 10000) {
                     fs.unlinkSync(filepath);
-                    reject(new Error('Fichier téléchargé trop petit (probablement une erreur)'));
+                    reject(new Error('Fichier téléchargé trop petit'));
                     return;
                 }
                 
-                console.log(`✅ Vidéo HD téléchargée: ${filename} (${fileSizeMB} MB)`);
+                console.log(`✅ Vidéo téléchargée: ${filename} (${fileSizeMB} MB)`);
                 resolve(filepath);
             });
             
             writer.on('error', (error) => {
-                console.error('❌ Erreur lors de l\'écriture du fichier:', error);
-                
-                // Nettoyer le fichier en cas d'erreur
-                if (fs.existsSync(filepath)) {
-                    fs.unlinkSync(filepath);
-                }
-                
-                reject(new Error('Erreur lors du téléchargement de la vidéo'));
+                if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+                reject(new Error('Erreur téléchargement'));
             });
             
-            // Timeout de sécurité
             const timeout = setTimeout(() => {
                 writer.close();
-                if (fs.existsSync(filepath)) {
-                    fs.unlinkSync(filepath);
-                }
-                reject(new Error('Timeout: le téléchargement a pris trop de temps'));
-            }, 180000); // 3 minutes
+                if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+                reject(new Error('Timeout'));
+            }, 180000);
             
             writer.on('finish', () => clearTimeout(timeout));
         });
         
     } catch (error) {
-        console.error('❌ Erreur downloadFromUrl:', error.message);
-        throw new Error('Échec du téléchargement de la vidéo: ' + error.message);
+        throw new Error('Échec du téléchargement: ' + error.message);
     }
 }
 
 // ===== NETTOYAGE FICHIERS ANCIENS =====
 function cleanOldFiles() {
     try {
-        const files = fs.readdirSync(DOWNLOAD_DIR);
-        const now = Date.now();
-        const maxAge = 60 * 60 * 1000; // 1 heure
-        
-        let cleaned = 0;
-        
-        files.forEach(file => {
-            const filepath = path.join(DOWNLOAD_DIR, file);
+        [DOWNLOAD_DIR, TEMP_DIR].forEach(dir => {
+            const files = fs.readdirSync(dir);
+            const now = Date.now();
+            const maxAge = 60 * 60 * 1000; // 1 heure
             
-            try {
-                const stats = fs.statSync(filepath);
-                const age = now - stats.mtimeMs;
-                
-                if (age > maxAge) {
-                    fs.unlinkSync(filepath);
-                    cleaned++;
-                    console.log(`🗑️ Fichier ancien supprimé: ${file}`);
-                }
-            } catch (err) {
-                console.error(`Erreur suppression ${file}:`, err.message);
+            let cleaned = 0;
+            
+            files.forEach(file => {
+                const filepath = path.join(dir, file);
+                try {
+                    const stats = fs.statSync(filepath);
+                    if (now - stats.mtimeMs > maxAge) {
+                        fs.unlinkSync(filepath);
+                        cleaned++;
+                    }
+                } catch (err) {}
+            });
+            
+            if (cleaned > 0) {
+                console.log(`✅ ${cleaned} fichier(s) nettoyé(s) dans ${path.basename(dir)}`);
             }
         });
-        
-        if (cleaned > 0) {
-            console.log(`✅ ${cleaned} fichier(s) ancien(s) nettoyé(s)`);
-        }
-        
     } catch (error) {
         console.error('Erreur nettoyage:', error.message);
     }
 }
 
-// Nettoyage automatique toutes les 30 minutes
 setInterval(cleanOldFiles, 30 * 60 * 1000);
-
-// Nettoyage au démarrage
 cleanOldFiles();
 
 // ===== EXPORTS =====
@@ -458,5 +631,6 @@ module.exports = {
     downloadVideo,
     downloadTikTok,
     downloadInstagram,
-    downloadPinterest
+    downloadPinterest,
+    downloadYouTube
 };
