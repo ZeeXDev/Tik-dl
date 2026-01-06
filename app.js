@@ -248,63 +248,109 @@ async function downloadVideo(url) {
     }
 }
 
-// ===== ADSGRAM (Version 2024 mise à jour) =====
+// ===== ADSGRAM & MONETAG (Dual System) =====
 elements.watchAdBtn.addEventListener('click', () => {
     showAd();
 });
 
-function showAd() {
-    // Vérifier si AdsGram est chargé
+async function showAd() {
+    // Désactiver le bouton pendant le chargement
+    elements.watchAdBtn.disabled = true;
+    elements.watchAdBtn.textContent = 'Chargement...';
+
+    // 1. Essayer ADSGRAM en premier
+    const adsgramSuccess = await tryAdsGram();
+    
+    // 2. Si AdsGram échoue (pas de pub), essayer Monetag
+    if (!adsgramSuccess) {
+        console.log('🔄 AdsGram épuisé, passage à Monetag...');
+        await tryMonetag();
+    }
+    
+    // Réactiver le bouton
+    elements.watchAdBtn.disabled = false;
+    elements.watchAdBtn.textContent = '▶️ Regarder une publicité (2h gratuites)';
+}
+
+// ===== ADSGRAM (inchangé) =====
+async function tryAdsGram() {
     if (typeof window.Adsgram === 'undefined') {
-        console.error('AdsGram SDK non chargé');
-        showMessage('error', 'Erreur de chargement de la publicité. Réessayez.');
+        console.warn('AdsGram SDK non chargé');
+        return false; // Passer à Monetag
+    }
+    
+    try {
+        const AdController = window.Adsgram.init({ 
+            blockId: ADSGRAM_BLOCK_ID,
+            debug: false
+        });
+        
+        // Attendre le résultat
+        const result = await AdController.show();
+        
+        console.log('✅ AdsGram réussi', result);
+        
+        if (tg?.HapticFeedback) {
+            tg.HapticFeedback.notificationOccurred('success');
+        }
+        
+        // Succès -> enregistrer la vue
+        await registerAdView();
+        return true; // AdsGram a fonctionné
+        
+    } catch (error) {
+        console.log('⚠️ AdsGram échoué:', error.message);
+        
+        // Si pas de pub disponible -> retourner false pour essayer Monetag
+        if (error.message === 'No ads available') {
+            showMessage('info', '🔄 Aucune pub AdsGram, tentative avec Monetag...');
+            return false;
+        }
+        
+        // Autres erreurs (fermé par user, etc.)
+        if (error.message === 'Ad closed by user') {
+            showMessage('warning', 'Vous devez regarder la pub jusqu\'au bout');
+        } else {
+            showMessage('error', 'Erreur AdsGram. Passage à l\'alternative...');
+        }
+        
+        return false;
+    }
+}
+
+// ===== MONETAG (nouveau) =====
+async function tryMonetag() {
+    // Vérifier si Monetag est chargé
+    if (typeof window.show_10408630 === 'undefined') {
+        console.error('Monetag SDK non chargé');
+        showMessage('error', '❌ Aucune publicité disponible sur les deux réseaux');
         return;
     }
     
     try {
-        // Nouvelle méthode AdsGram (2024)
-        const AdController = window.Adsgram.init({ 
-            blockId: ADSGRAM_BLOCK_ID,
-            debug: false,
-            debugBannerType: 'FullscreenMedia'
-        });
+        // Afficher la pub Monetag
+        await window.show_10408630();
         
-        // Afficher la pub
-        AdController.show().then((result) => {
-            // Pub vue avec succès
-            console.log('✅ Pub vue avec succès', result);
-            
-            if (tg?.HapticFeedback) {
-                tg.HapticFeedback.notificationOccurred('success');
-            }
-            
-            // Enregistrer côté serveur
-            registerAdView();
-            
-        }).catch((error) => {
-            // Pub fermée prématurément ou erreur
-            console.log('⚠️ Pub non terminée:', error);
-            
-            if (error.message === 'Ad closed by user') {
-                showMessage('warning', 'Vous devez regarder la pub jusqu\'à la fin pour débloquer 2h gratuit');
-            } else if (error.message === 'No ads available') {
-                showMessage('error', 'Aucune pub disponible pour le moment. Réessayez dans quelques secondes.');
-            } else {
-                showMessage('error', 'Erreur lors du chargement de la pub. Réessayez.');
-            }
-            
-            if (tg?.HapticFeedback) {
-                tg.HapticFeedback.notificationOccurred('warning');
-            }
-        });
+        console.log('✅ Monetag réussi');
+        
+        if (tg?.HapticFeedback) {
+            tg.HapticFeedback.notificationOccurred('success');
+        }
+        
+        // Même récompense que AdsGram
+        await registerAdView();
         
     } catch (error) {
-        console.error('❌ Erreur AdsGram:', error);
-        showMessage('error', 'Erreur lors de l\'initialisation de la publicité.');
+        console.error('❌ Monetag échoué:', error);
+        showMessage('error', '❌ Aucune pub disponible. Réessayez plus tard.');
+        
+        if (tg?.HapticFeedback) {
+            tg.HapticFeedback.notificationOccurred('warning');
+        }
     }
 }
 
-// Fonction pour enregistrer la vue de pub
+// ===== Fonction registerAdView (inchangée) =====
 async function registerAdView() {
     try {
         const response = await fetch(`${API_URL}/watch-ad`, {
@@ -337,6 +383,7 @@ async function registerAdView() {
         showMessage('error', 'Erreur lors de l\'activation. Vérifiez votre connexion.');
     }
 }
+
 
 // ===== UI HELPERS =====
 function setLoadingState(loading, text = '') {
