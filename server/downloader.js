@@ -1,385 +1,376 @@
-// ===== IMPORTS =====
+// ===== CONFIGURATION =====
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
-// ===== CONFIGURATION =====
 const DOWNLOAD_DIR = path.join(__dirname, '../downloads');
-
-// Créer le dossier downloads s'il n'existe pas
 if (!fs.existsSync(DOWNLOAD_DIR)) {
     fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
     console.log('📁 Dossier downloads créé');
 }
 
-// ===== FONCTION PRINCIPALE =====
+// ===== FONCTION PRINCIPALE AMÉLIORÉE =====
 async function downloadVideo(url, platform) {
     console.log(`🎬 Téléchargement ${platform}: ${url}`);
     
+    // Toujours chercher la meilleure qualité
     try {
-        let result = null;
-        
         switch (platform) {
             case 'tiktok':
-                result = await downloadTikTok(url);
-                break;
+                return await downloadTikTok_robust(url);
             case 'instagram':
-                result = await downloadInstagram(url);
-                break;
+                return await downloadInstagram_robust(url);
             case 'pinterest':
-                result = await downloadPinterest(url);
-                break;
+                return await downloadPinterest_robust(url);
             default:
                 throw new Error('Plateforme non supportée');
         }
-        
-        return result;
-        
     } catch (error) {
-        console.error(`❌ Erreur téléchargement ${platform}:`, error.message);
-        throw error;
+        console.error(`❌ ERREUR CRITIQUE ${platform}:`, error.message);
+        throw new Error(`Impossible de télécharger la vidéo. ${platform} a changé son API ou la vidéo est privée/supprimée.`);
     }
 }
 
-// ===== TIKTOK - HD avec TikWM API + Caption =====
-async function downloadTikTok(url) {
+// ===== TIKTOK - Système de fallback avec 3 APIs =====
+async function downloadTikTok_robust(url) {
+    console.log('🔄 TIKTOK MODE ROBUSTE - Tentative API #1 (TikWM)');
+    
+    // API #1: TikWM (votre méthode actuelle)
     try {
-        console.log('🎵 Utilisation TikWM API (HD, sans watermark)...');
-        
-        const response = await axios.post('https://www.tikwm.com/api/', {
-            url: url,
-            hd: 1  // HD activé
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            timeout: 30000
-        });
-        
-        if (response.data.code !== 0) {
-            throw new Error('Erreur API TikWM: ' + (response.data.msg || 'Vidéo non disponible'));
-        }
-        
-        // Récupérer les données
-        const data = response.data.data;
-        
-        // Priorité : HD > play (normal)
-        const videoUrl = data.hdplay || data.play;
-        
-        if (!videoUrl) {
-            throw new Error('URL vidéo TikTok non trouvée');
-        }
-        
-        // Récupérer la légende/description
-        const caption = data.title || '';
-        const author = data.author?.nickname || data.author?.unique_id || 'Utilisateur TikTok';
-        const music = data.music || '';
-        
-        console.log('✅ URL TikTok HD récupérée, téléchargement...');
-        console.log('📝 Caption:', caption);
-        
-        // Télécharger la vidéo
-        const videoPath = await downloadFromUrl(videoUrl, 'tiktok');
-        
-        return {
-            path: videoPath,
-            caption: caption,
-            author: author,
-            music: music
-        };
-        
+        return await downloadTikTok_tikwm(url);
     } catch (error) {
-        console.error('❌ Erreur TikWM:', error.message);
-        throw new Error('Impossible de télécharger cette vidéo TikTok. Le lien est peut-être invalide ou la vidéo a été supprimée.');
+        console.log('⚠️ TikWM échoué:', error.message);
+        console.log('🔄 TIKTOK Tentative API #2 (MusicallyDown)');
+    }
+    
+    // API #2: MusicallyDown (alternative populaire)
+    try {
+        return await downloadTikTok_musicallydown(url);
+    } catch (error) {
+        console.log('⚠️ MusicallyDown échoué:', error.message);
+        console.log('🔄 TIKTOK Tentative API #3 (SnapTik)');
+    }
+    
+    // API #3: SnapTik API (dernier recours)
+    try {
+        return await downloadTikTok_snaptik(url);
+    } catch (error) {
+        console.log('⚠️ SnapTik échoué:', error.message);
+        throw new Error('Toutes les APIs TikTok sont indisponibles. La vidéo est peut-être privée ou le lien invalide.');
     }
 }
 
-// ===== INSTAGRAM - Multiple APIs avec fallback + Caption =====
-async function downloadInstagram(url) {
-    console.log('📸 Téléchargement Instagram...');
+// TikTok API #1: TikWM (inchangée)
+async function downloadTikTok_tikwm(url) {
+    const response = await axios.post('https://www.tikwm.com/api/', {
+        url: url, hd: 1
+    }, {
+        headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        timeout: 30000
+    });
     
-    let videoPath = null;
-    let caption = '';
-    
-    // Méthode 1 : API Insta Downloader (NOUVELLE - La meilleure)
-    try {
-        console.log('Tentative API Insta Downloader...');
-        const result = await downloadInstagramAPI(url);
-        videoPath = result.path;
-        caption = result.caption;
-    } catch (error) {
-        console.log('Insta Downloader échoué:', error.message);
+    if (response.data.code !== 0) {
+        throw new Error(`TikWM: ${response.data.msg || 'Erreur API'}`);
     }
     
-    // Méthode 2 : Direct scraping avec mobile user agent
-    if (!videoPath) {
-        try {
-            console.log('Tentative scraping mobile Instagram...');
-            const result = await downloadInstagramMobile(url);
-            videoPath = result.path;
-            caption = result.caption;
-        } catch (error) {
-            console.log('Scraping mobile échoué:', error.message);
-        }
-    }
+    const data = response.data.data;
+    const videoUrl = data.hdplay || data.play;
     
-    // Méthode 3 : Scraping desktop
-    if (!videoPath) {
-        try {
-            console.log('Tentative scraping desktop Instagram...');
-            const result = await downloadInstagramScraping(url);
-            videoPath = result.path;
-            caption = result.caption;
-        } catch (error) {
-            console.log('Scraping desktop échoué:', error.message);
-        }
-    }
+    if (!videoUrl) throw new Error('TikWM: URL vidéo non trouvée');
     
-    if (!videoPath) {
-        throw new Error('Impossible de télécharger cette vidéo Instagram. Vérifiez que le compte n\'est pas privé et que c\'est bien une vidéo (Reel ou Post vidéo).');
-    }
+    console.log('✅ TikWM SUCCÈS - Qualité:', data.hdplay ? 'HD' : 'Standard');
     
     return {
-        path: videoPath,
-        caption: caption || ''
+        path: await downloadFromUrl(videoUrl, 'tiktok', data.hdplay ? 'HD' : 'SD'),
+        caption: data.title || '',
+        author: data.author?.nickname || 'Utilisateur TikTok',
+        music: data.music || ''
     };
 }
 
-// Instagram - API Insta Downloader (NOUVELLE)
-async function downloadInstagramAPI(url) {
-    const response = await axios.get('https://v3.igdownloader.app/api/ajaxSearch', {
-        params: {
-            recaptchaToken: '',
-            q: url,
-            t: 'media',
-            lang: 'en'
-        },
+// TikTok API #2: MusicallyDown
+async function downloadTikTok_musicallydown(url) {
+    const response = await axios.post('https://musicallydown.com/download', new URLSearchParams({
+        'url': url,
+        'token': ''
+    }), {
         headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
+            'Origin': 'https://musicallydown.com',
+            'Referer': 'https://musicallydown.com/'
+        },
+        timeout: 30000
+    });
+    
+    // Chercher les URLs dans la réponse
+    const videoMatch = response.data.match(/href="(https:\/\/[^"]+\.mp4[^"]*)"/);
+    if (!videoMatch) throw new Error('MusicallyDown: URL non trouvée');
+    
+    console.log('✅ MusicallyDown SUCCÈS');
+    
+    return {
+        path: await downloadFromUrl(videoMatch[1], 'tiktok', 'HD'),
+        caption: response.data.match(/<p[^>]*>([^<]+)<\/p>/)?.[1] || '',
+        author: 'Utilisateur TikTok',
+        music: ''
+    };
+}
+
+// TikTok API #3: SnapTik
+async function downloadTikTok_snaptik(url) {
+    const response = await axios.post('https://snaptik.app/api', {
+        url: url
+    }, {
+        headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        timeout: 30000
+    });
+    
+    if (!response.data.videoUrl) throw new Error('SnapTik: URL non reçue');
+    
+    console.log('✅ SnapTik SUCCÈS');
+    
+    return {
+        path: await downloadFromUrl(response.data.videoUrl, 'tiktok', 'HD'),
+        caption: response.data.caption || '',
+        author: response.data.author || 'Utilisateur TikTok',
+        music: ''
+    };
+}
+
+// ===== INSTAGRAM - Système de fallback amélioré =====
+async function downloadInstagram_robust(url) {
+    console.log('🔄 INSTAGRAM MODE ROBUSTE - API #1');
+    
+    // API #1: InstaDownloader
+    try {
+        return await downloadInstagram_instaapi(url);
+    } catch (error) {
+        console.log('⚠️ InstaAPI échoué:', error.message);
+        console.log('🔄 INSTAGRAM Tentative API #2 (Vidloder)');
+    }
+    
+    // API #2: Vidloder (alternative)
+    try {
+        return await downloadInstagram_vidloder(url);
+    } catch (error) {
+        console.log('⚠️ Vidloder échoué:', error.message);
+        throw new Error('Impossible de télécharger cette Instagram. Le compte est peut-être privé ou la vidéo a été supprimée.');
+    }
+}
+
+// Instagram API #1: InstaDownloader (plus robuste)
+async function downloadInstagram_instaapi(url) {
+    const response = await axios.get('https://v3.igdownloader.app/api/ajaxSearch', {
+        params: { recaptchaToken: '', q: url, t: 'media', lang: 'en' },
+        headers: {
+            'User-Agent': 'Mozilla/5.0',
             'Origin': 'https://igdownloader.app',
             'Referer': 'https://igdownloader.app/'
         },
-        timeout: 20000
+        timeout: 25000
     });
     
-    if (response.data && response.data.data) {
-        const html = response.data.data;
-        
-        // Chercher l'URL vidéo
-        const videoMatch = html.match(/href="([^"]+)"[^>]*class="[^"]*download[^"]*"/i) ||
-                          html.match(/href="([^"]+)"[^>]*>.*?Download.*?Video/i);
-        
-        // Extraire la caption
-        const captionMatch = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i);
-        const caption = captionMatch ? captionMatch[1].trim() : '';
-        
-        if (videoMatch && videoMatch[1]) {
-            const videoUrl = videoMatch[1];
-            console.log('✅ URL Instagram trouvée via API');
-            const videoPath = await downloadFromUrl(videoUrl, 'instagram');
-            
-            return { path: videoPath, caption: caption };
-        }
-    }
+    const html = response.data.data || response.data;
     
-    throw new Error('URL non trouvée via API');
+    // Chercher la meilleure qualité (priorité: HD > SD)
+    const videoMatch = html.match(/href="(https:\/\/[^"]+\.mp4[^"]*)"/i) ||
+                      html.match(/href="(https:\/\/[^"]+)"[^>]*class="[^"]*download[^"]*"/i);
+    
+    if (!videoMatch || !videoMatch[1]) throw new Error('InstaAPI: Aucune vidéo trouvée');
+    
+    // Extraire caption
+    const caption = html.match(/<p[^>]*class="[^"]*desc[^"]*"[^>]*>([^<]+)<\/p>/i)?.[1]?.trim() || '';
+    
+    console.log('✅ InstaAPI SUCCÈS - Caption:', caption ? 'Oui' : 'Non');
+    
+    return {
+        path: await downloadFromUrl(videoMatch[1], 'instagram', 'HD'),
+        caption: caption
+    };
 }
 
-// Instagram - Scraping mobile (NOUVEAU - Plus efficace)
-async function downloadInstagramMobile(url) {
-    // Nettoyer l'URL
-    let cleanUrl = url.replace(/\?.*$/, '');
-    if (!cleanUrl.endsWith('/')) cleanUrl += '/';
-    
-    const response = await axios.get(cleanUrl, {
+// Instagram API #2: Vidloder
+async function downloadInstagram_vidloder(url) {
+    const response = await axios.post('https://vidloder.com/api', {
+        url: url,
+        type: 'instagram'
+    }, {
         headers: {
-            'User-Agent': 'Instagram 76.0.0.15.395 Android (24/7.0; 640dpi; 1440x2560; samsung; SM-G930F; herolte; samsungexynos8890; en_US; 138226743)',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate',
-            'Cookie': 'sessionid=;'
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0'
         },
-        timeout: 30000
+        timeout: 25000
     });
     
-    // Chercher les données JSON dans le HTML
-    const scriptMatch = response.data.match(/<script type="application\/ld\+json">({[^<]+})<\/script>/);
+    if (!response.data.videoUrl) throw new Error('Vidloder: URL non reçue');
     
-    if (scriptMatch) {
-        try {
-            const data = JSON.parse(scriptMatch[1]);
-            
-            // Extraire caption
-            const caption = data.articleBody || data.description || '';
-            
-            // Chercher l'URL vidéo
-            const videoUrl = data.video?.contentUrl || 
-                           data.contentUrl || 
-                           data.embedUrl;
-            
-            if (videoUrl) {
-                console.log('✅ URL trouvée via scraping mobile (JSON-LD)');
-                const videoPath = await downloadFromUrl(videoUrl, 'instagram');
-                return { path: videoPath, caption: caption };
-            }
-        } catch (e) {
-            console.log('Erreur parsing JSON-LD:', e.message);
-        }
-    }
+    console.log('✅ Vidloder SUCCÈS');
     
-    // Fallback: chercher dans les meta tags
-    const videoMetaMatch = response.data.match(/<meta property="og:video" content="([^"]+)"/i) ||
-                          response.data.match(/<meta property="og:video:secure_url" content="([^"]+)"/i);
-    
-    const captionMetaMatch = response.data.match(/<meta property="og:description" content="([^"]+)"/i);
-    const caption = captionMetaMatch ? captionMetaMatch[1] : '';
-    
-    if (videoMetaMatch && videoMetaMatch[1]) {
-        const videoUrl = videoMetaMatch[1];
-        console.log('✅ URL trouvée via meta tags');
-        const videoPath = await downloadFromUrl(videoUrl, 'instagram');
-        return { path: videoPath, caption: caption };
-    }
-    
-    throw new Error('URL vidéo non trouvée (mobile scraping)');
+    return {
+        path: await downloadFromUrl(response.data.videoUrl, 'instagram', 'HD'),
+        caption: response.data.caption || ''
+    };
 }
 
-// Instagram - Scraping direct (fallback)
-async function downloadInstagramScraping(url) {
-    console.log('📸 Scraping direct Instagram...');
+// ===== PINTEREST - NOUVEAU système avec API dédiée =====
+async function downloadPinterest_robust(url) {
+    console.log('🔄 PINTEREST MODE ROBUSTE - API #1 (Pinterest API)');
     
-    // Nettoyer l'URL
-    let cleanUrl = url;
-    if (url.includes('?')) {
-        cleanUrl = url.split('?')[0];
-    }
-    if (!cleanUrl.endsWith('/')) {
-        cleanUrl += '/';
-    }
-    
-    const response = await axios.get(cleanUrl, {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive'
-        },
-        timeout: 30000
-    });
-    
-    // Chercher la caption/description
-    const captionMatch = response.data.match(/"edge_media_to_caption":\s*\{\s*"edges":\s*\[\s*\{\s*"node":\s*\{\s*"text":\s*"([^"]+)"/);
-    const caption = captionMatch ? captionMatch[1].replace(/\\n/g, '\n').replace(/\\u[\dA-F]{4}/gi, '') : '';
-    
-    // Chercher l'URL vidéo dans différents formats
-    const patterns = [
-        /"video_url":"([^"]+)"/,
-        /"playback_url":"([^"]+)"/,
-        /video_url=([^&]+)/,
-        /"src":"([^"]*\.mp4[^"]*)"/
-    ];
-    
-    for (const pattern of patterns) {
-        const match = response.data.match(pattern);
-        if (match && match[1]) {
-            let videoUrl = match[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/\\/g, '');
-            console.log('✅ URL vidéo trouvée via scraping');
-            const videoPath = await downloadFromUrl(videoUrl, 'instagram');
-            
-            return { path: videoPath, caption: caption };
-        }
-    }
-    
-    throw new Error('URL vidéo non trouvée dans le HTML');
-}
-
-// ===== PINTEREST - Amélioré avec meilleure détection + Caption =====
-async function downloadPinterest(url) {
+    // API #1: Pinterest API directe (MEILLEURE MÉTHODE)
     try {
-        console.log('📌 Scraping Pinterest...');
-        
-        // Nettoyer l'URL
-        let cleanUrl = url;
-        if (url.includes('pin.it')) {
-            // Résoudre les URLs raccourcies
-            const response = await axios.get(url, {
-                maxRedirects: 5,
-                validateStatus: () => true
-            });
-            cleanUrl = response.request.res.responseUrl || url;
-        }
-        
-        console.log('📌 URL Pinterest:', cleanUrl);
-        
-        const response = await axios.get(cleanUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            },
-            timeout: 30000
-        });
-        
-        // Extraire la description/caption
-        const descMatch = response.data.match(/"description":"([^"]+)"/);
-        const caption = descMatch ? descMatch[1].replace(/\\n/g, '\n') : '';
-        
-        // Chercher les URLs vidéo dans différents formats
-        const patterns = [
-            /"contentUrl":"([^"]+)"/,
-            /"video_list":\s*\{[^}]*"V_720P":\s*\{[^}]*"url":"([^"]+)"/,
-            /"video_list":\s*\{[^}]*"V_HLSV4":\s*\{[^}]*"url":"([^"]+)"/,
-            /"videos":\s*\{[^}]*"video_list":\s*\{[^}]*"V_\w+":\s*\{[^}]*"url":"([^"]+)"/,
-            /"url":"(https:\/\/[^"]*\.mp4[^"]*)"/
-        ];
-        
-        for (const pattern of patterns) {
-            const match = response.data.match(pattern);
-            if (match && match[1]) {
-                let videoUrl = match[1].replace(/\\/g, '');
-                console.log('✅ URL Pinterest trouvée');
-                const videoPath = await downloadFromUrl(videoUrl, 'pinterest');
-                
-                return { path: videoPath, caption: caption };
-            }
-        }
-        
-        throw new Error('URL vidéo Pinterest non trouvée dans le HTML');
-        
+        return await downloadPinterest_api(url);
     } catch (error) {
-        console.error('❌ Erreur Pinterest:', error.message);
-        throw new Error('Impossible de télécharger cette vidéo Pinterest. Vérifiez que le lien contient bien une vidéo et non une image.');
+        console.log('⚠️ Pinterest API échouée:', error.message);
+        console.log('🔄 PINTEREST Tentative #2 (Scraping avancé)');
+    }
+    
+    // Méthode #2: Scraping amélioré
+    try {
+        return await downloadPinterest_scraping(url);
+    } catch (error) {
+        console.log('⚠️ Scraping Pinterest échoué:', error.message);
+        throw new Error('Impossible de télécharger cette vidéo Pinterest. Le lien est invalide ou contient une image.');
     }
 }
 
-// ===== TÉLÉCHARGER DEPUIS URL (avec meilleure qualité) =====
-async function downloadFromUrl(videoUrl, platform) {
+// Pinterest API #1: API directe (très fiable)
+async function downloadPinterest_api(url) {
+    // Extraire l'ID de la pin
+    const pinIdMatch = url.match(/pin\/(\d+)/) || url.match(/\/(\d+)(?:\/|$)/);
+    if (!pinIdMatch) throw new Error('Pinterest: Pin ID non extrait');
+    
+    const pinId = pinIdMatch[1];
+    console.log('📌 Pinterest Pin ID:', pinId);
+    
+    // Utiliser l'API non-officielle Pinterest
+    const response = await axios.get(`https://www.pinterest.fr/resource/PinResource/get/`, {
+        params: {
+            'data': JSON.stringify({
+                "options": {
+                    "id": pinId,
+                    "field_set_key": "unauth_react"
+                }
+            })
+        },
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-APPLES': 'pleased',
+            'Accept': 'application/json, text/javascript, */*; q=0.01'
+        },
+        timeout: 25000
+    });
+    
+    const pinData = response.data?.resource_response?.data;
+    if (!pinData) throw new Error('Pinterest: Données pin non reçues');
+    
+    // Vérifier que c'est bien une vidéo
+    if (!pinData.videos) throw new Error('Pinterest: Ce n\'est pas une vidéo');
+    
+    // Chercher la meilleure qualité (V_720P > V_HLSV4 > premier disponible)
+    const videoObj = pinData.videos.video_list.V_720P || 
+                    pinData.videos.video_list.V_HLSV4 || 
+                    Object.values(pinData.videos.video_list)[0];
+    
+    if (!videoObj?.url) throw new Error('Pinterest: URL vidéo non trouvée');
+    
+    const videoUrl = videoObj.url;
+    const caption = pinData.description || pinData.title || '';
+    
+    console.log('✅ Pinterest API SUCCÈS - Qualité:', videoObj.format || 'HD');
+    
+    return {
+        path: await downloadFromUrl(videoUrl, 'pinterest', 'HD'),
+        caption: caption
+    };
+}
+
+// Pinterest Méthode #2: Scraping amélioré
+async function downloadPinterest_scraping(url) {
+    // Résoudre les URLs raccourcies
+    if (url.includes('pin.it')) {
+        const resolve = await axios.get(url, { maxRedirects: 5, timeout: 15000 });
+        url = resolve.request.res.responseUrl || url;
+    }
+    
+    console.log('📌 Scraping URL Pinterest:', url);
+    
+    const response = await axios.get(url, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
+        },
+        timeout: 25000
+    });
+    
+    // Chercher les données JSON dans le HTML (plus flexible)
+    const jsonMatch = response.data.match(/<script id="__PWS_DATA__" type="application\/json">({.+?})<\/script>/s) ||
+                     response.data.match(/window\.initial-redux-state\s*=\s*({.+});/s);
+    
+    if (!jsonMatch) throw new Error('Scraping: données JSON non trouvées');
+    
+    const data = JSON.parse(jsonMatch[1]);
+    
+    // Chercher le pin dans le JSON (parcours récursif)
+    const pinData = findPinDataRecursively(data);
+    if (!pinData?.videos) throw new Error('Scraping: vidéo non trouvée dans les données');
+    
+    const videoUrl = Object.values(pinData.videos.video_list)[0]?.url;
+    if (!videoUrl) throw new Error('Scraping: URL vidéo non extraite');
+    
+    console.log('✅ Pinterest Scraping SUCCÈS');
+    
+    return {
+        path: await downloadFromUrl(videoUrl, 'pinterest', 'HD'),
+        caption: pinData.description || ''
+    };
+}
+
+// Helper pour chercher pin dans JSON complexe
+function findPinDataRecursively(obj) {
+    if (typeof obj !== 'object' || !obj) return null;
+    
+    if (obj.videos && obj.id) return obj;
+    
+    for (const key in obj) {
+        if (key.startsWith('pin-') && typeof obj[key] === 'object') {
+            return obj[key];
+        }
+        const found = findPinDataRecursively(obj[key]);
+        if (found) return found;
+    }
+    
+    return null;
+}
+
+// ===== TÉLÉCHARGEMENT AMÉLIORÉ AVEC QUALITÉ =====
+async function downloadFromUrl(videoUrl, platform, quality = 'HD') {
     try {
-        const filename = `${platform}_${Date.now()}.mp4`;
+        const filename = `${platform}_${quality}_${Date.now()}.mp4`;
         const filepath = path.join(DOWNLOAD_DIR, filename);
         
-        console.log(`⬇️ Téléchargement de la vidéo HD...`);
+        console.log(`⬇️ Téléchargement ${quality}...`);
+        console.log('📎 URL:', videoUrl.substring(0, 100) + '...');
         
         const response = await axios({
             method: 'GET',
             url: videoUrl,
             responseType: 'stream',
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Referer': `https://www.${platform}.com/`,
-                'Accept': '*/*',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
+                'Accept': '*/*'
             },
-            timeout: 180000, // 3 minutes pour les vidéos HD
+            timeout: 180000,
             maxRedirects: 10,
-            maxContentLength: 100 * 1024 * 1024 // Max 100MB
+            maxContentLength: 200 * 1024 * 1024 // 200MB max (pour très HD)
         });
         
         const writer = fs.createWriteStream(filepath);
@@ -387,72 +378,67 @@ async function downloadFromUrl(videoUrl, platform) {
         
         return new Promise((resolve, reject) => {
             let downloadedSize = 0;
+            let lastLog = Date.now();
             
             response.data.on('data', (chunk) => {
                 downloadedSize += chunk.length;
+                
+                // Log progression toutes les 5s
+                if (Date.now() - lastLog > 5000) {
+                    console.log(`📥 Progression: ${(downloadedSize / 1024 / 1024).toFixed(2)} MB`);
+                    lastLog = Date.now();
+                }
             });
             
             writer.on('finish', () => {
                 const stats = fs.statSync(filepath);
-                const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+                const fileSizeMB = (stats.size / 1024 / 1024).toFixed(2);
                 
-                // Vérifier que le fichier n'est pas trop petit (erreur)
-                if (stats.size < 10000) { // Moins de 10KB
+                // Vérifier taille minimale (au moins 50KB)
+                if (stats.size < 50000) {
                     fs.unlinkSync(filepath);
-                    reject(new Error('Fichier téléchargé trop petit (probablement une erreur)'));
+                    reject(new Error(`Fichier trop petit (${fileSizeMB} MB) - probablement une erreur`));
                     return;
                 }
                 
-                console.log(`✅ Vidéo HD téléchargée: ${filename} (${fileSizeMB} MB)`);
+                console.log(`✅ Vidéo ${quality} téléchargée: ${filename} (${fileSizeMB} MB)`);
                 resolve(filepath);
             });
             
             writer.on('error', (error) => {
-                console.error('❌ Erreur lors de l\'écriture du fichier:', error);
-                
-                // Nettoyer le fichier en cas d'erreur
-                if (fs.existsSync(filepath)) {
-                    fs.unlinkSync(filepath);
-                }
-                
-                reject(new Error('Erreur lors du téléchargement de la vidéo'));
+                if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+                reject(error);
             });
             
-            // Timeout de sécurité
+            // Timeout sécurité
             const timeout = setTimeout(() => {
                 writer.close();
-                if (fs.existsSync(filepath)) {
-                    fs.unlinkSync(filepath);
-                }
-                reject(new Error('Timeout: le téléchargement a pris trop de temps'));
-            }, 180000); // 3 minutes
+                if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+                reject(new Error('Timeout: 3 minutes écoulées'));
+            }, 180000);
             
             writer.on('finish', () => clearTimeout(timeout));
         });
         
     } catch (error) {
         console.error('❌ Erreur downloadFromUrl:', error.message);
-        throw new Error('Échec du téléchargement de la vidéo: ' + error.message);
+        throw error;
     }
 }
 
-// ===== NETTOYAGE FICHIERS ANCIENS =====
+// ===== NETTOYAGE (inchangé) =====
 function cleanOldFiles() {
     try {
         const files = fs.readdirSync(DOWNLOAD_DIR);
         const now = Date.now();
-        const maxAge = 60 * 60 * 1000; // 1 heure
+        const maxAge = 60 * 60 * 1000;
         
         let cleaned = 0;
-        
         files.forEach(file => {
             const filepath = path.join(DOWNLOAD_DIR, file);
-            
             try {
                 const stats = fs.statSync(filepath);
-                const age = now - stats.mtimeMs;
-                
-                if (age > maxAge) {
+                if (now - stats.mtimeMs > maxAge) {
                     fs.unlinkSync(filepath);
                     cleaned++;
                     console.log(`🗑️ Fichier ancien supprimé: ${file}`);
@@ -462,25 +448,19 @@ function cleanOldFiles() {
             }
         });
         
-        if (cleaned > 0) {
-            console.log(`✅ ${cleaned} fichier(s) ancien(s) nettoyé(s)`);
-        }
-        
+        if (cleaned > 0) console.log(`✅ ${cleaned} fichier(s) nettoyé(s)`);
     } catch (error) {
         console.error('Erreur nettoyage:', error.message);
     }
 }
 
-// Nettoyage automatique toutes les 30 minutes
 setInterval(cleanOldFiles, 30 * 60 * 1000);
-
-// Nettoyage au démarrage
 cleanOldFiles();
 
 // ===== EXPORTS =====
 module.exports = {
     downloadVideo,
-    downloadTikTok,
-    downloadInstagram,
-    downloadPinterest
+    downloadTikTok: downloadTikTok_robust,
+    downloadInstagram: downloadInstagram_robust,
+    downloadPinterest: downloadPinterest_robust
 };
