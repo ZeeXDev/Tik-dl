@@ -1,16 +1,85 @@
+// ===== INSTALLATION DES DÉPENDANCES =====
+// Exécutez ces commandes dans votre terminal:
+// npm install express cors node-telegram-bot-api dotenv winston express-rate-limit validator
+// ========================================
+
 // ===== IMPORTS =====
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
+const rateLimit = require('express-rate-limit');
+const validator = require('validator');
+const winston = require('winston');
+const fs = require('fs');
+const path = require('path');
 const { downloadVideo } = require('./downloader');
 const { getUser, updateUserFreeTime, checkFreeTime } = require('./database');
+
+// ===== CONFIGURATION WINSTON LOGGER =====
+const logger = winston.createLogger({
+    level: 'info',
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.errors({ stack: true }),
+        winston.format.json()
+    ),
+    transports: [
+        new winston.transports.File({ filename: 'error.log', level: 'error' }),
+        new winston.transports.File({ filename: 'combined.log' }),
+        new winston.transports.Console({
+            format: winston.format.combine(
+                winston.format.colorize(),
+                winston.format.simple()
+            )
+        })
+    ]
+});
 
 // ===== CONFIGURATION =====
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://tik-dl3.vercel.app';
+const DOWNLOAD_DIR = path.join(__dirname, '../downloads');
+
+// ===== VALIDATION ENVIRONNEMENT =====
+const requiredEnv = ['TELEGRAM_BOT_TOKEN'];
+for (const env of requiredEnv) {
+    if (!process.env[env]) {
+        logger.error(`❌ Variable manquante: ${env}`);
+        process.exit(1);
+    }
+}
+
+// ===== CONSTANTES CENTRALISÉES =====
+const PLATFORMS = {
+    tiktok: { 
+        regex: /(tiktok\.com|vm\.tiktok\.com|www\.tiktok\.com)/i, 
+        name: 'TikTok', 
+        icon: '🎵' 
+    },
+    instagram: { 
+        regex: /(instagram\.com|instagr\.am|ig\.me|www\.instagram\.com)/i, 
+        name: 'Instagram', 
+        icon: '📸' 
+    },
+    pinterest: { 
+        regex: /(pinterest\.com|pinterest\.fr|pinterest\.ca|pin\.it|www\.pinterest\.com)/i, 
+        name: 'Pinterest', 
+        icon: '📌' 
+    }
+};
+
+const ERROR_MESSAGES = {
+    URL_INVALID: '❌ Lien invalide. Vérifiez que l\'URL commence par http:// ou https://',
+    PRIVATE_VIDEO: '🔒 Vidéo privée ou compte protégé',
+    RATELIMIT: '⏳ Trop de demandes, réessayez dans 1 minute',
+    DOWNLOAD_FAILED: '❌ Échec du téléchargement',
+    AD_REQUIRED: '⚠️ Tu dois d\'abord regarder une pub !',
+    FILE_TOO_LARGE: '📦 Vidéo trop lourde (max 200MB)',
+    TIMEOUT: '⏱️ Téléchargement trop long (timeout 3 min)'
+};
 
 // ===== MIDDLEWARE =====
 app.use(cors({
@@ -20,10 +89,24 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ===== RATE LIMITING =====
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20, // 20 requêtes par fenêtre
+    message: ERROR_MESSAGES.RATELIMIT,
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+const downloadLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 heure
+    max: 50, // 50 téléchargements par heure
+    message: ERROR_MESSAGES.RATELIMIT
+});
+
 // ===== BOT TELEGRAM =====
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-
-console.log('🤖 Bot Telegram démarré...');
+logger.info('🤖 Bot Telegram démarré...');
 
 // Commande /start avec bouton WebApp
 bot.onText(/\/start/, (msg) => {
@@ -52,7 +135,7 @@ bot.onText(/\/start/, (msg) => {
         `👋 Salut ${firstName} !\n\n` +
         `Bienvenue sur **Video Downloader** 🎥\n\n` +
         `Je peux télécharger des vidéos depuis :\n` +
-        `🎵 TikTok\n` +
+        `🎵 TikTok  🎨 Pinterest\n\n` +
         `**Comment ça marche ?**\n` +
         `1️⃣ Clique sur le bouton ci-dessous\n` +
         `2️⃣ Regarde une pub (2h gratuit)\n` +
@@ -95,6 +178,7 @@ function sendHelpMessage(chatId) {
         `5. Je t'envoie la vidéo ici ! 📹\n\n` +
         `**✅ Plateformes supportées :**\n` +
         `• TikTok (sans watermark)\n` +
+        `• Pinterest\n\n` +
         `**⏰ Système gratuit :**\n` +
         `• 1 pub = 2h de téléchargements\n` +
         `• Illimité pendant 2h\n` +
@@ -102,7 +186,7 @@ function sendHelpMessage(chatId) {
         `**🆘 Problèmes ?**\n` +
         `• Vérifie que le lien est public\n` +
         `• Vérifie que c'est bien une vidéo\n` +
-        `• Contacte le support si besoin\n\n` +
+        `• Contacte @support si besoin\n\n` +
         `Bonne utilisation ! 😊`,
         { parse_mode: 'Markdown' }
     );
@@ -125,12 +209,11 @@ bot.on('message', async (msg) => {
         const url = urls[0];
         
         // Détecter la plateforme
-        let platform = null;
-        if (url.match(/(tiktok\.com|vm\.tiktok\.com)/i)) platform = 'tiktok';
-        else if (url.match(/(instagram\.com|instagr\.am|ig\.me)/i)) platform = 'instagram';
-        else if (url.match(/(pinterest\.com|pinterest\.fr|pinterest\.ca|pin\.it)/i)) platform = 'pinterest';
+        const platformEntry = Object.entries(PLATFORMS).find(([_, p]) => p.regex.test(url));
         
-        if (platform) {
+        if (platformEntry) {
+            const platform = platformEntry[0];
+            
             // Vérifier free time
             const hasFreeTime = await checkFreeTime(chatId);
             
@@ -144,7 +227,7 @@ bot.on('message', async (msg) => {
                 
                 bot.sendMessage(
                     chatId,
-                    `⚠️ Tu dois d'abord regarder une pub !\n\n` +
+                    ERROR_MESSAGES.AD_REQUIRED + `\n\n` +
                     `Ouvre l'application et regarde une pub pour débloquer 2h de téléchargements gratuits 🎁`,
                     { reply_markup: keyboard }
                 );
@@ -152,27 +235,22 @@ bot.on('message', async (msg) => {
             }
             
             // Télécharger
-            bot.sendMessage(chatId, `⏳ Téléchargement en cours...\nPlateforme : ${platform.toUpperCase()}`);
+            bot.sendMessage(chatId, `⏳ Téléchargement en cours...\nPlateforme : ${PLATFORMS[platform].name}`);
             
             try {
                 await downloadAndSend(chatId, url, platform);
             } catch (error) {
-                bot.sendMessage(
-                    chatId,
-                    `❌ Erreur lors du téléchargement.\n\n` +
-                    `Raisons possibles :\n` +
-                    `• Vidéo privée ou supprimée\n` +
-                    `• Lien invalide\n` +
-                    `• Problème technique\n\n` +
-                    `Réessaie avec un autre lien.`
-                );
+                const userMessage = formatErrorMessage(error);
+                bot.sendMessage(chatId, userMessage);
             }
         } else {
             bot.sendMessage(
                 chatId,
                 `❌ Plateforme non supportée.\n\n` +
                 `J'accepte uniquement :\n` +
-                `🎵 TikTok`
+                `🎵 TikTok\n` +
+                `📸 Instagram\n` +
+                `📌 Pinterest`
             );
         }
     }
@@ -181,9 +259,17 @@ bot.on('message', async (msg) => {
 // ===== API ROUTES =====
 
 // GET /api/status/:userId - Vérifier le statut free time
-app.get('/api/status/:userId', async (req, res) => {
+app.get('/api/status/:userId', apiLimiter, async (req, res) => {
     try {
         const { userId } = req.params;
+        
+        if (!userId || isNaN(userId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'User ID invalide'
+            });
+        }
+        
         const user = await getUser(userId);
         
         if (!user || !user.freeUntil) {
@@ -213,41 +299,41 @@ app.get('/api/status/:userId', async (req, res) => {
         }
         
     } catch (error) {
-        console.error('Erreur status:', error);
+        logger.error('Erreur status:', { error: error.message, stack: error.stack });
         res.status(500).json({
             success: false,
-            message: 'Erreur serveur'
+            message: 'Erreur serveur',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
 
 // POST /api/watch-ad - Enregistrer qu'une pub a été vue
-app.post('/api/watch-ad', async (req, res) => {
+app.post('/api/watch-ad', apiLimiter, async (req, res) => {
     try {
         const { userId } = req.body;
         
-        if (!userId) {
+        if (!userId || isNaN(userId)) {
             return res.status(400).json({
                 success: false,
-                message: 'User ID manquant'
+                message: 'User ID manquant ou invalide'
             });
         }
         
         // Donner 2h de free time
-        const freeUntil = new Date(Date.now() + 2 * 60 * 60 * 1000); // +2h
+        const freeUntil = new Date(Date.now() + 2 * 60 * 60 * 1000);
         
         await updateUserFreeTime(userId, freeUntil);
         
-        console.log(`✅ User ${userId} a regardé une pub - Free until: ${freeUntil}`);
+        logger.info(`✅ Pub regardée`, { userId, freeUntil });
         
         // Envoyer un message de confirmation
         bot.sendMessage(
             userId,
             `🎉 Parfait !\n\n` +
             `Tu as maintenant **2 heures** de téléchargements gratuits !\n\n` +
-            `Tu peux télécharger autant de vidéos que tu veux pendant les 2 prochaines heures. ⏰\n\n` +
-            `Bon téléchargement ! 📥`
-        ).catch(err => console.log('Erreur envoi message:', err));
+            `Tu peux télécharger autant de vidéos que tu veux pendant les 2 prochaines heures. ⏰`
+        ).catch(err => logger.error('Erreur envoi message:', err));
         
         res.json({
             success: true,
@@ -256,25 +342,31 @@ app.post('/api/watch-ad', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Erreur watch-ad:', error);
+        logger.error('Erreur watch-ad:', { error: error.message, stack: error.stack });
         res.status(500).json({
             success: false,
-            message: 'Erreur serveur'
+            message: 'Erreur serveur',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
 
 // POST /api/download - Télécharger une vidéo
-app.post('/api/download', async (req, res) => {
+app.post('/api/download', downloadLimiter, async (req, res) => {
     try {
         const { userId, url, platform } = req.body;
         
-        // Validation
-        if (!userId || !url || !platform) {
-            return res.status(400).json({
-                success: false,
-                message: 'Données manquantes'
-            });
+        // Validation stricte
+        if (!userId || isNaN(userId)) {
+            return res.status(400).json({ success: false, message: 'User ID invalide' });
+        }
+        
+        if (!url || !validator.isURL(url, { require_protocol: true })) {
+            return res.status(400).json({ success: false, message: ERROR_MESSAGES.URL_INVALID });
+        }
+        
+        if (!platform || !PLATFORMS[platform]) {
+            return res.status(400).json({ success: false, message: 'Platforme invalide' });
         }
         
         // Vérifier free time
@@ -284,40 +376,49 @@ app.post('/api/download', async (req, res) => {
             return res.status(403).json({
                 success: false,
                 needsAd: true,
-                message: 'Regardez une pub pour continuer'
+                message: ERROR_MESSAGES.AD_REQUIRED
             });
         }
         
-        console.log(`📥 Téléchargement demandé - User: ${userId}, Platform: ${platform}`);
+        logger.info(`📥 Téléchargement demandé`, { userId, platform, url: url.substring(0, 50) });
         
         // Répondre immédiatement
         res.json({
             success: true,
-            message: 'Téléchargement en cours...'
+            message: 'Téléchargement en file d\'attente...'
         });
         
-        // Télécharger et envoyer (asynchrone)
+        // Télécharger et envoyer (asynchrone, non bloquant)
         downloadAndSend(userId, url, platform);
         
     } catch (error) {
-        console.error('Erreur download:', error);
+        logger.error('Erreur download:', { error: error.message, stack: error.stack });
         res.status(500).json({
             success: false,
-            message: 'Erreur serveur'
+            message: 'Erreur serveur',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
 
 // ===== FONCTION TÉLÉCHARGEMENT + ENVOI =====
 async function downloadAndSend(userId, url, platform) {
+    let videoPath = null;
+    let statusMsg = null;
+    
     try {
-        console.log(`⬇️ Téléchargement ${platform} pour user ${userId}...`);
+        // Validation URL
+        if (!validator.isURL(url, { require_protocol: true })) {
+            throw new Error('URL invalide');
+        }
         
-        // Envoyer un message de statut
-        const statusMsg = await bot.sendMessage(
+        logger.info(`⬇️ Début téléchargement`, { userId, platform, url: url.substring(0, 50) });
+        
+        // Envoyer message de statut
+        statusMsg = await bot.sendMessage(
             userId,
             `⏳ Téléchargement en cours...\n\n` +
-            `Plateforme : ${platform.toUpperCase()}\n` +
+            `Plateforme : ${PLATFORMS[platform].name.toUpperCase()}\n` +
             `Cela peut prendre 10-30 secondes ⏱️`
         );
         
@@ -325,90 +426,147 @@ async function downloadAndSend(userId, url, platform) {
         const result = await downloadVideo(url, platform);
         
         if (!result || !result.path) {
-            throw new Error('Échec du téléchargement');
+            throw new Error('Échec du téléchargement: fichier non créé');
         }
         
-        const videoPath = result.path;
-        const caption = result.caption || '';
-        const author = result.author || '';
-        const music = result.music || '';
+        videoPath = result.path;
         
-        console.log(`✅ Vidéo téléchargée: ${videoPath}`);
-        if (caption) console.log(`📝 Caption: ${caption}`);
+        // Supprimer message de statut
+        await bot.deleteMessage(userId, statusMsg.message_id).catch(() => {});
         
-        // Supprimer le message de statut
-        bot.deleteMessage(userId, statusMsg.message_id).catch(() => {});
+        // Construire caption
+        const fullCaption = buildCaption(result, platform);
         
-        // Construire la légende complète
-        let fullCaption = `✅ Vidéo ${platform.toUpperCase()}\n\n`;
-        
-        // Ajouter la légende originale si elle existe
-        if (caption) {
-            // Limiter la caption à 800 caractères (Telegram limite = 1024)
-            const truncatedCaption = caption.length > 800 ? caption.substring(0, 797) + '...' : caption;
-            fullCaption += `📝 ${truncatedCaption}\n\n`;
-        }
-        
-        // Ajouter l'auteur pour TikTok
-        if (platform === 'tiktok' && author) {
-            fullCaption += `👤 @${author}\n`;
-        }
-        
-        // Ajouter la musique pour TikTok
-        if (platform === 'tiktok' && music) {
-            fullCaption += `🎵 ${music}\n`;
-        }
-        
-        fullCaption += `\n🎥 Téléchargé avec Video Downloader`;
-        
-        // Envoyer via bot
+        // Envoyer la vidéo
         await bot.sendVideo(userId, videoPath, {
             caption: fullCaption,
             supports_streaming: true,
             parse_mode: 'Markdown'
         });
         
-        console.log(`📤 Vidéo envoyée à ${userId}`);
-        
-        // Supprimer le fichier temporaire
-        const fs = require('fs');
-        if (fs.existsSync(videoPath)) {
-            fs.unlinkSync(videoPath);
-            console.log(`🗑️ Fichier temporaire supprimé`);
-        }
+        logger.info(`✅ Vidéo envoyée`, { userId, platform, file: videoPath });
         
     } catch (error) {
-        console.error('Erreur downloadAndSend:', error);
+        logger.error(`❌ Erreur téléchargement`, { 
+            userId, 
+            platform, 
+            error: error.message, 
+            stack: error.stack 
+        });
         
-        // Envoyer message d'erreur à l'utilisateur
-        bot.sendMessage(
-            userId,
-            `❌ Désolé, une erreur est survenue lors du téléchargement.\n\n` +
-            `Raisons possibles :\n` +
-            `• Vidéo privée ou supprimée\n` +
-            `• Lien invalide\n` +
-            `• Problème de connexion\n` +
-            `• Vidéo trop lourde\n\n` +
-            `Réessayez avec un autre lien ou contactez le support.`
-        );
+        // Supprimer le message de statut en cas d'erreur
+        if (statusMsg) {
+            await bot.deleteMessage(userId, statusMsg.message_id).catch(() => {});
+        }
+        
+        // Envoyer l'erreur exacte à l'utilisateur (en dev) ou un message générique (en prod)
+        const userMessage = formatErrorMessage(error);
+        await bot.sendMessage(userId, userMessage);
+        
+    } finally {
+        // ⭐ CRITIQUE: Toujours supprimer le fichier temporaire
+        if (videoPath && fs.existsSync(videoPath)) {
+            try {
+                fs.unlinkSync(videoPath);
+                logger.info(`🗑️ Fichier supprimé`, { file: videoPath });
+            } catch (unlinkError) {
+                logger.error(`❌ Erreur suppression fichier`, { 
+                    file: videoPath, 
+                    error: unlinkError.message 
+                });
+            }
+        }
+    }
+}
+
+// ===== HELPERS =====
+
+function buildCaption(result, platform) {
+    let caption = `✅ Vidéo ${PLATFORMS[platform].name.toUpperCase()}\n\n`;
+    
+    if (result.caption) {
+        const truncated = result.caption.length > 800 
+            ? result.caption.substring(0, 797) + '...' 
+            : result.caption;
+        caption += `📝 ${truncated}\n\n`;
+    }
+    
+    if (platform === 'tiktok' && result.author) {
+        caption += `👤 @${result.author}\n`;
+    }
+    
+    if (platform === 'tiktok' && result.music) {
+        caption += `🎵 ${result.music}\n`;
+    }
+    
+    caption += `\n🎥 Téléchargé avec Video Downloader`;
+    return caption;
+}
+
+function formatErrorMessage(error) {
+    // En développement: envoyer l'erreur exacte
+    if (process.env.NODE_ENV === 'development') {
+        return `❌ Erreur détaillée:\n\n${error.message}\n\nStack trace:\n${error.stack}`;
+    }
+    
+    // En production: message générique mais informatif
+    if (error.message.includes('URL invalide')) {
+        return ERROR_MESSAGES.URL_INVALID;
+    } else if (error.message.includes('private') || error.message.includes('privée')) {
+        return ERROR_MESSAGES.PRIVATE_VIDEO;
+    } else if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+        return ERROR_MESSAGES.TIMEOUT;
+    } else if (error.message.includes('Too large') || error.message.includes('100MB')) {
+        return ERROR_MESSAGES.FILE_TOO_LARGE;
+    } else if (error.message.includes('ratelimit') || error.message.includes('trop de demandes')) {
+        return ERROR_MESSAGES.RATELIMIT;
+    } else {
+        return `❌ Erreur lors du téléchargement.\n\n` +
+               `Raisons possibles:\n` +
+               `• Vidéo privée ou supprimée\n` +
+               `• Lien invalide\n` +
+               `• Problème technique\n` +
+               `• Vidéo trop lourde (>200MB)\n\n` +
+               `Réessayez ou contactez le support.`;
     }
 }
 
 // ===== HEALTH CHECK =====
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'OK',
-        timestamp: new Date().toISOString(),
-        bot: 'running',
-        webapp: WEBAPP_URL
-    });
+app.get('/health', async (req, res) => {
+    try {
+        // Vérifier la base de données
+        const dbStatus = await getUser(123456789).then(() => 'OK').catch(() => 'ERROR');
+        
+        // Vérifier le bot
+        const botStatus = await bot.getMe().then(() => 'OK').catch(() => 'ERROR');
+        
+        // Vérifier l'espace disque
+        const fs = require('fs').promises;
+        const stats = await fs.stat(DOWNLOAD_DIR).catch(() => null);
+        const diskStatus = stats ? 'OK' : 'ERROR';
+        
+        res.json({
+            status: 'OK',
+            timestamp: new Date().toISOString(),
+            services: {
+                bot: botStatus,
+                database: dbStatus,
+                disk: diskStatus
+            },
+            uptime: process.uptime()
+        });
+    } catch (error) {
+        logger.error('Health check failed:', error);
+        res.status(503).json({ status: 'ERROR', error: error.message });
+    }
 });
 
 // ===== ROOT =====
 app.get('/', (req, res) => {
     res.json({
         name: 'Video Downloader API',
-        version: '1.0.0',
+        version: '2.0.0',
+        mode: process.env.NODE_ENV || 'production',
         endpoints: {
             status: 'GET /api/status/:userId',
             watchAd: 'POST /api/watch-ad',
@@ -422,35 +580,53 @@ app.get('/', (req, res) => {
     });
 });
 
-// ===== ERROR HANDLER =====
+// ===== ERROR HANDLER GLOBAL =====
 app.use((error, req, res, next) => {
-    console.error('Erreur:', error);
+    logger.error('❌ Erreur non gérée:', { 
+        error: error.message, 
+        stack: error.stack,
+        url: req.url,
+        method: req.method
+    });
+    
     res.status(500).json({
         success: false,
-        message: 'Erreur serveur interne'
+        message: 'Erreur serveur interne',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
 });
 
 // ===== DÉMARRAGE SERVEUR =====
 app.listen(PORT, () => {
-    console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-    console.log(`📱 WebApp URL: ${WEBAPP_URL}`);
-    console.log(`🤖 Bot Token: ${BOT_TOKEN ? '✅ Configuré' : '❌ Manquant'}`);
-    console.log(`🌐 Backend URL: http://localhost:${PORT}`);
+    logger.info(`🚀 Serveur démarré`, {
+        port: PORT,
+        webapp: WEBAPP_URL,
+        botToken: BOT_TOKEN ? '✅ Configuré' : '❌ Manquant',
+        nodeEnv: process.env.NODE_ENV || 'production'
+    });
 });
 
 // ===== GESTION ERREURS BOT =====
 bot.on('polling_error', (error) => {
-    console.error('Erreur polling:', error.code, error.message);
+    logger.error('Erreur polling bot:', { 
+        code: error.code, 
+        message: error.message 
+    });
 });
 
 bot.on('error', (error) => {
-    console.error('Erreur bot:', error);
+    logger.error('Erreur bot:', error);
 });
 
 // ===== GRACEFUL SHUTDOWN =====
 process.on('SIGINT', () => {
-    console.log('\n👋 Arrêt du serveur...');
+    logger.info('\n👋 Arrêt du serveur...');
+    bot.stopPolling();
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    logger.info('\n👋 Arrêt forcé (SIGTERM)...');
     bot.stopPolling();
     process.exit(0);
 });
